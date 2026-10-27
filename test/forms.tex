@@ -14,6 +14,12 @@
 %   pk12util -i cert.p12 -d sql:nss -W ''
 %   pdfsig -add-signature -nssdir sql:nss -nick pdftest \
 %     -new-signature-field-name sig forms.pdf signed.pdf
+%
+% sigfield.pdf is this form with an empty signature field `approval',
+% added in a QDF copy (qpdf --qdf) as a widget annotation of page 1
+% and an entry of /AcroForm /Fields:
+%   << /FT /Sig /T (approval) /Type /Annot /Subtype /Widget /F 4
+%      /P <page> /Rect [ 300 80 540 140 ] /MK << /BC [ 0 0 1 ] >> >>
 \documentclass{article}
 \usepackage{hyperref}
 \pagestyle{empty}
