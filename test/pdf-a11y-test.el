@@ -152,6 +152,7 @@
 (ert-deftest pdf-a11y-report ()
   (skip-unless (pdf-info-structure-tree-p))
   (pdf-test-with-pdf "a11y.pdf"
+    (pdf-view-mode)
     (let ((report (pdf-a11y-report)))
       (unwind-protect
           (with-current-buffer report
@@ -169,6 +170,7 @@
               (should (= (+ 3 3 15) n))))
         (kill-buffer report))))
   (pdf-test-with-pdf "a11y-untagged.pdf"
+    (pdf-view-mode)
     (let ((report (pdf-a11y-report)))
       (unwind-protect
           (with-current-buffer report
