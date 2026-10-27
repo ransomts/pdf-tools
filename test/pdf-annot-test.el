@@ -56,7 +56,10 @@
              (stamp (icon . "Approved"))))
           (pdf-annot-color-history nil)
           (pdf-annot-activate-created-annotations nil))
-      (cl-letf (((symbol-function 'pdf-util-assert-pdf-window) #'ignore))
+      (cl-letf (((symbol-function 'pdf-util-assert-pdf-window) #'ignore)
+                ;; The test buffer is not in pdf-view-mode.
+                ((symbol-function 'pdf-util-pdf-buffer-p)
+                 (lambda (&rest _) t)))
         (let ((square (pdf-annot-add-square-annotation
                        '(1 (0.5 0.5 0.25 0.25)) "blue"
                        '((interior-color . "yellow"))))
