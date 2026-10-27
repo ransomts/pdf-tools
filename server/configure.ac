@@ -18,6 +18,7 @@ HAVE_POPPLER_FIND_OPTS="no   (requires poppler-glib >= 0.22)"
 HAVE_POPPLER_ANNOT_WRITE="no   (requires poppler-glib >= 0.19.4)"
 HAVE_POPPLER_ANNOT_MARKUP="no (requires poppler-glib >= 0.26)"
 HAVE_POPPLER_SIGNATURES="no   (requires poppler-glib >= 21.12)"
+HAVE_POPPLER_STRUCTURE="no   (requires poppler-glib >= 0.26)"
 
 PKG_CHECK_MODULES([png], [libpng])
 PKG_CHECK_MODULES([glib], [glib-2.0])
@@ -27,6 +28,7 @@ PKG_CHECK_EXISTS([poppler-glib >= 0.19.4], [HAVE_POPPLER_ANNOT_WRITE=yes])
 PKG_CHECK_EXISTS([poppler-glib >= 0.22], [HAVE_POPPLER_FIND_OPTS=yes])
 PKG_CHECK_EXISTS([poppler-glib >= 0.26], [HAVE_POPPLER_ANNOT_MARKUP=yes])
 PKG_CHECK_EXISTS([poppler-glib >= 21.12], [HAVE_POPPLER_SIGNATURES=yes])
+PKG_CHECK_EXISTS([poppler-glib >= 0.26], [HAVE_POPPLER_STRUCTURE=yes])
 PKG_CHECK_MODULES([zlib], [zlib])
 
 AC_COMPILE_IFELSE(
@@ -65,6 +67,11 @@ if test "$HAVE_POPPLER_SIGNATURES" = yes; then
     [Define to 1 to enable validating signatures (requires poppler-glib >= 21.12).])
 fi
 
+if test "$HAVE_POPPLER_STRUCTURE" = yes; then
+  AC_DEFINE([HAVE_POPPLER_STRUCTURE],1,
+    [Define to 1 to enable reading the structure tree of tagged PDFs (requires poppler-glib >= 0.26).])
+fi
+
 AC_CANONICAL_HOST
 # Checks for header files.
 AC_CHECK_HEADERS([stdlib.h string.h strings.h err.h])
@@ -101,4 +108,5 @@ echo "Is case-sensitive searching enabled ?     ${HAVE_POPPLER_FIND_OPTS}"
 echo "Is modifying text annotations enabled ?   ${HAVE_POPPLER_ANNOT_WRITE}"
 echo "Is modifying markup annotations enabled ? ${HAVE_POPPLER_ANNOT_MARKUP}"
 echo "Is validating signatures enabled ?        ${HAVE_POPPLER_SIGNATURES}"
+echo "Is reading the structure tree enabled ?   ${HAVE_POPPLER_STRUCTURE}"
 echo

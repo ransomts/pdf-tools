@@ -238,6 +238,7 @@ This also applies when updating via MELPA / NonGNU ELPA (except for running the 
 + SyncTeX :: Jump from a position on a page directly to the TeX source and vice versa.
 + Virtual :: Use a collection of documents as if it were one, big single PDF.
 + Pages :: Delete, extract, move and rotate pages, and insert pages of other PDFs, changing the file itself (needs the =qpdf= program). [[id:7740dc50-5c1c-4d94-b896-264066d06efa][More information here]].
++ Accessibility :: Review a tagged PDF for what a conformance checker cannot judge (=M-x pdf-a11y-report=): figures and their alt text, the heading outline, the reading order of each page, untagged pages, language and fonts that are not embedded.
 + Misc ::
   - Display PDF's metadata.
   - Mark a region and kill the text from the PDF.
