@@ -263,12 +263,6 @@
                   'two)))))
 
 (ert-deftest pdf-links-read-link-action-no-links ()
-  ;; BUG: `pdf-links-read-link-action' collects one list of links per
-  ;; displayed page and checks (not links), but a page without links
-  ;; contributes nil, so LINKS is (nil) and the check never fires.
-  ;; Instead of "No links on displayed pages" the command goes on to
-  ;; decorate the page and read keys for an empty set of links.
-  :expected-result :failed
   (pdf-links-test-with-displayed-pdf
     (cl-letf (((symbol-function 'read-char-choice)
                (lambda (&rest _) (error "Read a key for no links"))))
