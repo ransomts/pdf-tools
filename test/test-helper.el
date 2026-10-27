@@ -90,6 +90,23 @@
 (defmacro pdf-test-with-encrypted-pdf (&rest body)
   `(pdf-test-with-pdf "encrypted.pdf" ,@body))
 
+(defmacro pdf-test-with-test-pdf-view (&rest body)
+  "Like `pdf-test-with-test-pdf', but with the buffer in `pdf-view-mode'.
+
+`pdf-test-with-pdf' visits the file before it restarts the server, so
+a server stopped by an earlier test makes `pdf-view-mode' fail half
+way through its setup; and an earlier test may have taken PDF Tools
+out of `auto-mode-alist'.  Guard against both."
+  (declare (indent 0) (debug t))
+  `(progn
+     (pdf-info-process-assert-running t)
+     (let ((auto-mode-alist (cons pdf-tools-auto-mode-alist-entry
+                                  auto-mode-alist)))
+       (pdf-test-with-test-pdf
+         (unless (derived-mode-p 'pdf-view-mode)
+           (pdf-view-mode))
+         ,@body))))
+
 ;; ---
 (require 'undercover)
 (undercover "lisp/*.el")
