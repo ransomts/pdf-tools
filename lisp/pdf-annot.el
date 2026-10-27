@@ -34,6 +34,11 @@
 (require 'cl-lib)
 (require 'seq)
 
+(defvar pdf-links-convert-pointsize-scale)
+(defvar pdf-links-read-link-convert-commands)
+(declare-function pdf-links-read-link-action--create-keys "pdf-links")
+(declare-function pdf-links-read-link-action--read-chars "pdf-links")
+
 
 ;; * ================================================================== *
 ;; * Customizations

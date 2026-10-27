@@ -402,7 +402,6 @@ Return nil if there is no matching page."
   (pdf-virtual-document-find-matching-page page predicate nil doc))
 
 (pdf-virtual-document-defun previous-matching-page (page predicate doc)
-  (declare (indent 1))
   (pdf-virtual-document-find-matching-page page predicate t doc))
 
 (pdf-virtual-document-defun next-file (page doc)
