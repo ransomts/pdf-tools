@@ -629,8 +629,13 @@ interrupted."
 
 ;; An element of the structure command's response.
 (defun pdf-info-query--transform-structure-element (r)
-  "Transform a structure element response R into an alist."
-  (cl-destructuring-bind (depth kind page edges has-alt alt actual lang text) r
+  "Transform a structure element response R into an alist.
+
+R has one more field, the list numbering, if it was read with the
+full text."
+  (cl-destructuring-bind (depth kind page edges has-alt alt actual lang text
+                                &optional (numbering nil full))
+      r
     `((depth . ,(string-to-number depth))
       (kind . ,(intern kind))
       (page . ,(string-to-number page))
@@ -640,7 +645,10 @@ interrupted."
       (alt . ,(and (equal has-alt "1") alt))
       (actual-text . ,(and (not (equal actual "")) actual))
       (lang . ,(and (not (equal lang "")) lang))
-      (text . ,text))))
+      (text . ,text)
+      ,@(and full
+             `((list-numbering . ,(and (not (equal numbering ""))
+                                       (intern numbering))))))))
 
 (defun pdf-info-query--transform-annotation (a)
   (cl-labels ((not-empty (s)
@@ -1803,7 +1811,7 @@ pages in FILE-OR-BUFFER."
    'pagelabels
    (pdf-info--normalize-file-or-buffer file-or-buffer)))
 
-(defun pdf-info-structure (&optional file-or-buffer)
+(defun pdf-info-structure (&optional file-or-buffer full)
   "Return the logical structure tree of document FILE-OR-BUFFER.
 
 The tree is returned flattened, in document order, which for a
@@ -1832,13 +1840,28 @@ LANG -- The element's own language (/Lang), or nil.
 TEXT -- A short excerpt of the element's text, with whitespace
 folded.  It is empty for grouping elements like `section'.
 
+If FULL is non-nil, TEXT is the element's whole text, for reading
+it: the text of descendants that have an /ActualText is replaced
+by it, and figures, formulas and forms nested in the element add
+no text to it.  Each element then has one more key.
+
+LIST-NUMBERING -- For a `list-item', the numbering of its list as
+a symbol: `none', `disc', `circle', `square', `decimal',
+`upper-roman', `lower-roman', `upper-alpha' or `lower-alpha'.
+Otherwise nil.
+
+Reading the full text is cheaper than reading the excerpts: each
+piece of content is read once rather than once for each element
+it is nested in.
+
 The list is empty if the document is not tagged.  Signal an error
 if the server lacks support, see `pdf-info-structure-tree-p'."
   (unless (pdf-info-structure-tree-p)
     (error "Reading the structure tree is not supported by this version of epdfinfo"))
-  (pdf-info-query
-   'structure
-   (pdf-info--normalize-file-or-buffer file-or-buffer)))
+  (apply #'pdf-info-query
+         'structure
+         (pdf-info--normalize-file-or-buffer file-or-buffer)
+         (and full '(1))))
 
 (defun pdf-info-fonts (&optional file-or-buffer)
   "Return the fonts used in document FILE-OR-BUFFER.

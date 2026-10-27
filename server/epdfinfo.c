@@ -2469,12 +2469,17 @@ cmd_outline (const epdfinfo_t *ctx, const command_arg_t *args)
 
 #ifdef HAVE_POPPLER_STRUCTURE
 /* Name: structure
-   Args: filename
+   Args: filename [full]
    Returns: The document's logical structure tree (tagged PDF) in
    document (i.e. reading) order, as a, possibly empty, list of
    records:
 
    depth kind page edges has-alt alt actual-text language text
+
+   or, if FULL is given and not 0,
+
+   depth kind page edges has-alt alt actual-text language text
+   list-numbering
 
    DEPTH is the level in the tree (>= 1).  KIND is the element's
    kind as a lower-case name (e.g. document, heading-1, paragraph,
@@ -2487,6 +2492,16 @@ cmd_outline (const epdfinfo_t *ctx, const command_arg_t *args)
    0 otherwise; ALT is its value.  TEXT is a short excerpt of the
    element's text; it is empty for grouping elements (document, part,
    section, ...).
+
+   With FULL, TEXT is the element's whole text instead, for reading
+   it: the text of descendants with an /ActualText is replaced by
+   it, and the text of figures, formulas and forms nested in the
+   element is left out (a figure's own TEXT is still its text).
+   Whitespace is folded in both cases.  LIST-NUMBERING is the
+   numbering of the list a list item is in (none, disc, circle,
+   square, decimal, upper-roman, lower-roman, upper-alpha or
+   lower-alpha) and empty for other elements.  FULL reads each piece of content once, while without it the text
+   of nested elements is read again for each of them.
 
    The list is empty if the document has no structure tree, i.e. it
    is not tagged.
@@ -2542,6 +2557,100 @@ structure_kind_string (PopplerStructureElementKind kind)
   return value ? value->value_nick : "unknown";
 }
 
+/* Return the structure text of ELT, with its subtree's if RECURSIVE.
+
+   poppler-glib's text of marked content is UTF-8, but it converts it
+   to UTF-8 again as if it were PDFDocEncoding, so that e.g. a bullet
+   comes out as three characters.  Undo that: map each character back
+   to its PDFDocEncoding byte and use the result if it is valid UTF-8.
+   Three bytes (0x7F, 0x9F and 0xAD) all map to U+FFFD; it is taken
+   as the one that makes a valid sequence, 0x9F when both 0x9F and
+   0xAD would.  Return the text unchanged if it cannot be undone,
+   e.g. because a future poppler returns it right. */
+static gchar *
+structure_element_text (PopplerStructureElement *elt, gboolean recursive)
+{
+  /* The characters of the PDFDocEncoding bytes 0x18 to 0x1F and 0x80
+     to 0xA0 that are not the same as in Latin-1. */
+  static const gunichar pdfdoc_18[8] =
+    { 0x02d8, 0x02c7, 0x02c6, 0x02d9, 0x02dd, 0x02db, 0x02da, 0x02dc };
+  static const gunichar pdfdoc_80[33] =
+    { 0x2022, 0x2020, 0x2021, 0x2026, 0x2014, 0x2013, 0x0192, 0x2044,
+      0x2039, 0x203a, 0x2212, 0x2030, 0x201e, 0x201c, 0x201d, 0x2018,
+      0x2019, 0x201a, 0x2122, 0xfb01, 0xfb02, 0x0141, 0x0152, 0x0160,
+      0x0178, 0x017d, 0x0131, 0x0142, 0x0153, 0x0161, 0x017e, 0xfffd,
+      0x20ac };
+  gchar *text = poppler_structure_element_get_text
+    (elt, recursive ? POPPLER_STRUCTURE_GET_TEXT_RECURSIVE : 0);
+  GString *bytes;
+  const gchar *p;
+  /* The number of continuation bytes still expected, and the lead
+     byte if the next one is the second byte of a sequence. */
+  int need = 0;
+  guchar lead = 0;
+
+  if (! text || ! g_utf8_validate (text, -1, NULL))
+    {
+      g_free (text);
+      return NULL;
+    }
+
+  bytes = g_string_sized_new (strlen (text));
+  for (p = text; *p; p = g_utf8_next_char (p))
+    {
+      gunichar c = g_utf8_get_char (p);
+      int b = -1, i;
+
+      if (c == 0xfffd)
+        {
+          if (need == 0)
+            b = 0x7f;
+          else if (lead == 0xe0)
+            b = 0xad;           /* 0xE0 needs 0xA0 to 0xBF. */
+          else
+            b = 0x9f;
+        }
+      else if (c < 0x18 || (c >= 0x20 && c < 0x7f)
+               || (c >= 0xa1 && c <= 0xff && c != 0xad))
+        b = c;
+      else
+        {
+          for (i = 0; i < 8 && b < 0; ++i)
+            if (pdfdoc_18[i] == c)
+              b = 0x18 + i;
+          for (i = 0; i < 33 && b < 0; ++i)
+            if (pdfdoc_80[i] == c)
+              b = 0x80 + i;
+        }
+      if (b < 0)
+        {
+          g_string_free (bytes, TRUE);
+          return text;
+        }
+
+      if (need > 0 && (b & 0xc0) == 0x80)
+        --need;
+      else if ((b & 0xe0) == 0xc0)
+        need = 1;
+      else if ((b & 0xf0) == 0xe0)
+        need = 2;
+      else if ((b & 0xf8) == 0xf0)
+        need = 3;
+      else
+        need = 0;
+      lead = ((b & 0xc0) == 0xc0) ? b : 0;
+      g_string_append_c (bytes, b);
+    }
+
+  if (! g_utf8_validate (bytes->str, bytes->len, NULL))
+    {
+      g_string_free (bytes, TRUE);
+      return text;
+    }
+  g_free (text);
+  return g_string_free (bytes, FALSE);
+}
+
 /* Truncate STR to at most MAX characters and fold all whitespace
    runs into one space, in place.  STR has to be valid UTF-8. */
 static char *
@@ -2578,6 +2687,65 @@ structure_squeeze_text (char *str, glong max)
   return str;
 }
 
+/* Print the fields of structure element ELT, at DEPTH and on page
+   PN, up to its edges. */
+static void
+structure_print_location (PopplerDocument *doc, PopplerStructureElement *elt,
+                          int depth, int pn)
+{
+  PopplerRectangle bbox;
+
+  printf ("%d:", depth);
+  print_response_string (structure_kind_string
+                         (poppler_structure_element_get_kind (elt)),
+                         COLON);
+  printf ("%d:", pn > 0 ? pn : 0);
+
+  /* poppler-glib only reads the BBox of block-level elements;
+     figures, formulas and other illustrations are not, and so
+     carry no edges. */
+  if (pn > 0
+      && poppler_structure_element_is_block (elt)
+      && poppler_structure_element_get_bounding_box (elt, &bbox))
+    {
+      PopplerPage *page = poppler_document_get_page (doc, pn - 1);
+      double width, height;
+
+      if (page)
+        {
+          poppler_page_get_size (page, &width, &height);
+          /* BBox is in default user space, origin at the
+             bottom-left. */
+          printf ("%f %f %f %f",
+                  MIN (bbox.x1, bbox.x2) / width,
+                  (height - MAX (bbox.y1, bbox.y2)) / height,
+                  MAX (bbox.x1, bbox.x2) / width,
+                  (height - MIN (bbox.y1, bbox.y2)) / height);
+          g_object_unref (page);
+        }
+    }
+  putchar (':');
+}
+
+/* Print ELT's alternate description, replacement text and language,
+   each followed by a colon. */
+static void
+structure_print_alternates (PopplerStructureElement *elt)
+{
+  gchar *alt, *actual, *lang;
+
+  alt = poppler_structure_element_get_alt_text (elt);
+  printf ("%d:", alt != NULL);
+  print_response_string (alt, COLON);
+  actual = poppler_structure_element_get_actual_text (elt);
+  print_response_string (actual, COLON);
+  lang = poppler_structure_element_get_language (elt);
+  print_response_string (lang, COLON);
+  g_free (alt);
+  g_free (actual);
+  g_free (lang);
+}
+
 static void
 cmd_structure_walk (PopplerDocument *doc, PopplerStructureElementIter *iter,
                     int depth)
@@ -2587,8 +2755,7 @@ cmd_structure_walk (PopplerDocument *doc, PopplerStructureElementIter *iter,
       PopplerStructureElement *elt
         = poppler_structure_element_iter_get_element (iter);
       PopplerStructureElementIter *child;
-      PopplerRectangle bbox;
-      gchar *alt, *actual, *lang, *text = NULL;
+      gchar *text = NULL;
       int pn;
 
       if (! elt)
@@ -2613,56 +2780,16 @@ cmd_structure_walk (PopplerDocument *doc, PopplerStructureElementIter *iter,
           poppler_structure_element_iter_free (copy);
         }
 
-      printf ("%d:", depth);
-      print_response_string (structure_kind_string
-                             (poppler_structure_element_get_kind (elt)),
-                             COLON);
-      printf ("%d:", pn > 0 ? pn : 0);
-
-      /* poppler-glib only reads the BBox of block-level elements;
-         figures, formulas and other illustrations are not, and so
-         carry no edges. */
-      if (pn > 0
-          && poppler_structure_element_is_block (elt)
-          && poppler_structure_element_get_bounding_box (elt, &bbox))
-        {
-          PopplerPage *page = poppler_document_get_page (doc, pn - 1);
-          double width, height;
-
-          if (page)
-            {
-              poppler_page_get_size (page, &width, &height);
-              /* BBox is in default user space, origin at the
-                 bottom-left. */
-              printf ("%f %f %f %f",
-                      MIN (bbox.x1, bbox.x2) / width,
-                      (height - MAX (bbox.y1, bbox.y2)) / height,
-                      MAX (bbox.x1, bbox.x2) / width,
-                      (height - MIN (bbox.y1, bbox.y2)) / height);
-              g_object_unref (page);
-            }
-        }
-      putchar (':');
-
-      alt = poppler_structure_element_get_alt_text (elt);
-      printf ("%d:", alt != NULL);
-      print_response_string (alt, COLON);
-      actual = poppler_structure_element_get_actual_text (elt);
-      print_response_string (actual, COLON);
-      lang = poppler_structure_element_get_language (elt);
-      print_response_string (lang, COLON);
+      structure_print_location (doc, elt, depth, pn);
+      structure_print_alternates (elt);
       if (! poppler_structure_element_is_grouping (elt))
-        text = poppler_structure_element_get_text
-          (elt, POPPLER_STRUCTURE_GET_TEXT_RECURSIVE);
-      if (text && g_utf8_validate (text, -1, NULL))
+        text = structure_element_text (elt, TRUE);
+      if (text)
         print_response_string (structure_squeeze_text
                                (text, STRUCTURE_TEXT_MAX), NEWLINE);
       else
         putchar ('\n');
 
-      g_free (alt);
-      g_free (actual);
-      g_free (lang);
       g_free (text);
       g_object_unref (elt);
 
@@ -2674,24 +2801,224 @@ cmd_structure_walk (PopplerDocument *doc, PopplerStructureElementIter *iter,
     } while (poppler_structure_element_iter_next (iter));
 }
 
+/* A structure element read with its subtree, for the full structure
+   command. */
+typedef struct structure_node
+{
+  PopplerStructureElement *elt;
+  /* The 1-based page of the element or of its first descendant
+     with one, or 0. */
+  int page;
+  /* The text of the subtree, see structure_read_tree. */
+  GString *text;
+  GPtrArray *children;
+} structure_node_t;
+
+static void
+structure_node_free (gpointer data)
+{
+  structure_node_t *node = data;
+
+  if (node->elt)
+    g_object_unref (node->elt);
+  g_string_free (node->text, TRUE);
+  g_ptr_array_free (node->children, TRUE);
+  g_free (node);
+}
+
+static structure_node_t *
+structure_node_new (PopplerStructureElement *elt)
+{
+  structure_node_t *node = g_new0 (structure_node_t, 1);
+
+  node->elt = elt;
+  node->text = g_string_new (NULL);
+  node->children = g_ptr_array_new_with_free_func (structure_node_free);
+  return node;
+}
+
+static gboolean
+structure_is_illustration (PopplerStructureElement *elt)
+{
+  switch (poppler_structure_element_get_kind (elt))
+    {
+    case POPPLER_STRUCTURE_ELEMENT_FIGURE:
+    case POPPLER_STRUCTURE_ELEMENT_FORMULA:
+    case POPPLER_STRUCTURE_ELEMENT_FORM:
+      return TRUE;
+    default:
+      return FALSE;
+    }
+}
+
+/* Append TEXT to STRING, separated by a space if SEPARATE. */
+static void
+structure_append_text (GString *string, const char *text, gboolean separate)
+{
+  if (! text || ! *text)
+    return;
+  if (separate && string->len > 0
+      && ! g_ascii_isspace (string->str[string->len - 1]))
+    g_string_append_c (string, ' ');
+  g_string_append (string, text);
+}
+
+/* Read the elements of ITER and its siblings as the children of
+   PARENT.  Each piece of marked content is read once, and its text
+   appended to that of its parent; the text of an element is that of
+   its subtree, or its /ActualText if it has one.  Figures, formulas
+   and forms do not add their text to their parent; their content is
+   not read as text.  Block-level elements and table cells are
+   separated from what precedes them by a space. */
+static void
+structure_read_tree (PopplerStructureElementIter *iter,
+                     structure_node_t *parent)
+{
+  do
+    {
+      PopplerStructureElement *elt
+        = poppler_structure_element_iter_get_element (iter);
+      PopplerStructureElementIter *child;
+      structure_node_t *node;
+      gchar *actual;
+      int pn;
+
+      if (! elt)
+        continue;
+      pn = MAX (poppler_structure_element_get_page (elt) + 1, 0);
+      if (poppler_structure_element_get_kind (elt)
+          == POPPLER_STRUCTURE_ELEMENT_OBJECT_REFERENCE)
+        {
+          g_object_unref (elt);
+          continue;
+        }
+      if (poppler_structure_element_is_content (elt))
+        {
+          gchar *text = structure_element_text (elt, FALSE);
+
+          structure_append_text (parent->text, text, FALSE);
+          g_free (text);
+          g_object_unref (elt);
+          if (parent->page == 0)
+            parent->page = pn;
+          continue;
+        }
+
+      node = structure_node_new (elt);
+      node->page = pn;
+      child = poppler_structure_element_iter_get_child (iter);
+      if (child)
+        {
+          structure_read_tree (child, node);
+          poppler_structure_element_iter_free (child);
+        }
+      actual = poppler_structure_element_get_actual_text (elt);
+      if (actual && *actual && g_utf8_validate (actual, -1, NULL))
+        g_string_assign (node->text, actual);
+      g_free (actual);
+
+      if (! structure_is_illustration (elt))
+        {
+          PopplerStructureElementKind kind
+            = poppler_structure_element_get_kind (elt);
+
+          structure_append_text
+            (parent->text, node->text->str,
+             ! poppler_structure_element_is_inline (elt)
+             || kind == POPPLER_STRUCTURE_ELEMENT_TABLE_HEADING
+             || kind == POPPLER_STRUCTURE_ELEMENT_TABLE_DATA);
+        }
+      if (parent->page == 0)
+        parent->page = node->page;
+      g_ptr_array_add (parent->children, node);
+    } while (poppler_structure_element_iter_next (iter));
+}
+
+/* Print the nodes in CHILDREN and their subtrees at DEPTH, as records
+   of the full structure command. */
+static void
+structure_print_tree (PopplerDocument *doc, GPtrArray *children, int depth)
+{
+  static GEnumClass *numberings = NULL;
+  guint i;
+
+  if (! numberings)
+    numberings = g_type_class_ref (POPPLER_TYPE_STRUCTURE_LIST_NUMBERING);
+
+  for (i = 0; i < children->len; ++i)
+    {
+      structure_node_t *node = g_ptr_array_index (children, i);
+      PopplerStructureElement *elt = node->elt;
+      PopplerStructureElementKind kind
+        = poppler_structure_element_get_kind (elt);
+
+      structure_print_location (doc, elt, depth, node->page);
+      structure_print_alternates (elt);
+      if (! poppler_structure_element_is_grouping (elt))
+        print_response_string (structure_squeeze_text
+                               (node->text->str, G_MAXLONG), COLON);
+      else
+        putchar (':');
+
+      /* ListNumbering is an attribute of the list, but poppler-glib
+         (up to 26.09 at least) only reads it for a list item, which
+         inherits it.  It reads the row and column span of table
+         cells only for tables, so these are left out. */
+      if (kind == POPPLER_STRUCTURE_ELEMENT_LIST_ITEM)
+        {
+          GEnumValue *value = g_enum_get_value
+            (numberings, poppler_structure_element_get_list_numbering (elt));
+          print_response_string (value ? value->value_nick : "", NEWLINE);
+        }
+      else
+        putchar ('\n');
+
+      structure_print_tree (doc, node->children, depth + 1);
+    }
+}
+
 const command_arg_type_t cmd_structure_spec[] =
   {
     ARG_DOC,
+    ARG_REST,                   /* [full] */
   };
 
 static void
 cmd_structure (const epdfinfo_t *ctx, const command_arg_t *args)
 {
   PopplerDocument *doc = args->value.doc->pdf;
-  PopplerStructureElementIter *iter = poppler_structure_element_iter_new (doc);
+  const command_arg_t *rest = &args[1];
+  PopplerStructureElementIter *iter;
+  gboolean full = FALSE;
 
-  OK_BEGIN ();
-  if (iter)
+  perror_if_not (rest->value.rest.nargs <= 1, "%s", "Too many arguments");
+  if (rest->value.rest.nargs == 1)
     {
-      cmd_structure_walk (doc, iter, 1);
-      poppler_structure_element_iter_free (iter);
+      const char *flag = rest->value.rest.args[0];
+
+      perror_if_not (! strcmp (flag, "0") || ! strcmp (flag, "1"),
+                     "Expected 0 or 1:%s", flag);
+      full = *flag == '1';
     }
+
+  iter = poppler_structure_element_iter_new (doc);
+  OK_BEGIN ();
+  if (iter && full)
+    {
+      structure_node_t *root = structure_node_new (NULL);
+
+      structure_read_tree (iter, root);
+      structure_print_tree (doc, root->children, 1);
+      structure_node_free (root);
+    }
+  else if (iter)
+    cmd_structure_walk (doc, iter, 1);
   OK_END ();
+  if (iter)
+    poppler_structure_element_iter_free (iter);
+
+ error:
+  return;
 }
 #endif  /* HAVE_POPPLER_STRUCTURE */
 
