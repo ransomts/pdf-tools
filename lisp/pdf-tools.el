@@ -121,6 +121,7 @@ In order to customize dark and light colors use
   '(pdf-history-minor-mode
     pdf-isearch-minor-mode
     pdf-links-minor-mode
+    pdf-form-minor-mode
     pdf-misc-minor-mode
     pdf-outline-minor-mode
     pdf-misc-size-indication-minor-mode
@@ -137,6 +138,7 @@ In order to customize dark and light colors use
   '(pdf-history-minor-mode
     pdf-isearch-minor-mode
     pdf-links-minor-mode
+    pdf-form-minor-mode
     pdf-misc-minor-mode
     pdf-outline-minor-mode
     pdf-misc-size-indication-minor-mode

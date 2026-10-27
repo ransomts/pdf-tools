@@ -17,6 +17,7 @@ AM_PROG_AR
 HAVE_POPPLER_FIND_OPTS="no   (requires poppler-glib >= 0.22)"
 HAVE_POPPLER_ANNOT_WRITE="no   (requires poppler-glib >= 0.19.4)"
 HAVE_POPPLER_ANNOT_MARKUP="no (requires poppler-glib >= 0.26)"
+HAVE_POPPLER_SIGNATURES="no   (requires poppler-glib >= 21.12)"
 
 PKG_CHECK_MODULES([png], [libpng])
 PKG_CHECK_MODULES([glib], [glib-2.0])
@@ -25,6 +26,7 @@ PKG_CHECK_MODULES([poppler_glib], [poppler-glib >= 0.16.0])
 PKG_CHECK_EXISTS([poppler-glib >= 0.19.4], [HAVE_POPPLER_ANNOT_WRITE=yes])
 PKG_CHECK_EXISTS([poppler-glib >= 0.22], [HAVE_POPPLER_FIND_OPTS=yes])
 PKG_CHECK_EXISTS([poppler-glib >= 0.26], [HAVE_POPPLER_ANNOT_MARKUP=yes])
+PKG_CHECK_EXISTS([poppler-glib >= 21.12], [HAVE_POPPLER_SIGNATURES=yes])
 PKG_CHECK_MODULES([zlib], [zlib])
 
 AC_COMPILE_IFELSE(
@@ -56,6 +58,11 @@ fi
 if test "$HAVE_POPPLER_ANNOT_MARKUP" = yes; then
   AC_DEFINE([HAVE_POPPLER_ANNOT_MARKUP],1,
     [Define to 1 to enable adding of markup annotations (requires poppler-glib >= 0.26).])
+fi
+
+if test "$HAVE_POPPLER_SIGNATURES" = yes; then
+  AC_DEFINE([HAVE_POPPLER_SIGNATURES],1,
+    [Define to 1 to enable validating signatures (requires poppler-glib >= 21.12).])
 fi
 
 AC_CANONICAL_HOST
@@ -93,4 +100,5 @@ echo
 echo "Is case-sensitive searching enabled ?     ${HAVE_POPPLER_FIND_OPTS}"
 echo "Is modifying text annotations enabled ?   ${HAVE_POPPLER_ANNOT_WRITE}"
 echo "Is modifying markup annotations enabled ? ${HAVE_POPPLER_ANNOT_MARKUP}"
+echo "Is validating signatures enabled ?        ${HAVE_POPPLER_SIGNATURES}"
 echo
