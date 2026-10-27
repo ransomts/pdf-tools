@@ -302,7 +302,11 @@ See `pdf-links-action-perform' for the interface."
 
 (defun pdf-links-read-link-action--create-keys (n)
   (when (> n 0)
-    (let ((len (1+ (floor (log n 26))))
+    ;; As many letters as N - 1 has base-26 digits.
+    (let ((len (let ((len 1) (m (1- n)))
+                 (while (>= m 26)
+                   (setq m (/ m 26) len (1+ len)))
+                 len))
           keys)
       (dotimes (i n)
         (let (key)
