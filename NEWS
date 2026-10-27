@@ -30,6 +30,10 @@
   + ~S-mouse-1~ moves the end of the selection to the click (~pdf-view-mouse-set-region-end~), keeping the word or line steps of a double or triple click.
   + The selection works with ~M-w~ and the markup annotation commands such as ~C-c C-a h~, and in ~pdf-view-roll-minor-mode~.
   + With ~pdf-sync-minor-mode~, double-click still jumps to the TeX source when the PDF has a SyncTeX file; ~C-mouse-1~ does so always.
+- Add ~pdf-present~, a presenter view for giving talks from a PDF
+  + ~M-x pdf-present~ opens an audience frame with the current slide alone, full screen on another monitor (~pdf-present-audience-monitor~, or ~C-u M-x pdf-present~ to choose), and a presenter frame with the current and next slides, the speaker notes, the slide counter (with page labels), the elapsed time and the clock.
+  + Speaker notes come from Beamer PDFs built with =show notes on second screen=right= (slide and notes side by side on each page) or =show notes= (separate notes pages, which the audience never sees); ~pdf-present-notes-layout~ detects which by default.
+  + Keys in both frames: ~n~ / ~p~ (also PageDown/PageUp and the arrow keys that clickers send), ~<~ / ~>~, ~g~ to go to a slide, ~b~ / ~w~ for a black or white screen, ~t~ / ~r~ to pause or reset the timer, ~q~ to quit and restore the buffer, windows and frames.
 
 ** Functionality improvements and fixes
 - Annotation colors no longer get slightly darker each time a document is saved and reopened.

@@ -33,6 +33,8 @@ The ~pdf-tools~ Wiki is maintained at https://pdftools.wiki. Head to the site if
     - [[#keybindings-for-page-operations][Keybindings for page operations]]
   - [[#working-with-auctex][Working with AUCTeX]]
     - [[#keybindings-for-working-with-auctex][Keybindings for working with AUCTeX]]
+  - [[#present-slides][Present Slides]]
+    - [[#keybindings-for-presenting-slides][Keybindings for presenting slides]]
   - [[#miscellaneous-features][Miscellaneous features]]
     - [[#keybindings-for-miscellaneous-features-in-pdf-tools][Keybindings for miscellaneous features in PDF tools]]
   - [[#easy-help-for-pdf-tools-features][Easy Help for PDF Tools features]]
@@ -239,6 +241,7 @@ This also applies when updating via MELPA / NonGNU ELPA (except for running the 
 + Virtual :: Use a collection of documents as if it were one, big single PDF.
 + Pages :: Delete, extract, move and rotate pages, and insert pages of other PDFs, changing the file itself (needs the =qpdf= program). [[id:7740dc50-5c1c-4d94-b896-264066d06efa][More information here]].
 + Accessibility :: Review a tagged PDF for what a conformance checker cannot judge (=M-x pdf-a11y-report=): figures and their alt text, the heading outline, the reading order of each page, untagged pages, language and fonts that are not embedded.
++ Present :: Give a talk from a PDF (=M-x pdf-present=): the slide alone, full screen, on the projector, and a presenter view with the next slide, speaker notes from Beamer, a timer and the clock. [[id:0c1d7f3e-5b8a-4e52-9a51-2f6c3e7d8b41][More information here]].
 + Misc ::
   - Display PDF's metadata.
   - Mark a region and kill the text from the PDF.
@@ -437,6 +440,46 @@ The prefix is ~pdf-pages-minor-mode-map-prefix~.
 | Refresh File (e.g., after recompiling source) | ~g~                        |
 | Jump to PDF Location from Source              | ~C-c C-g~                  |
 | Jump Source Location from PDF                 | ~C-mouse-1~ / double-click |
+
+** Present Slides
+:PROPERTIES:
+:CREATED:  [2026-10-27 Tue 14:45]
+:ID:       0c1d7f3e-5b8a-4e52-9a51-2f6c3e7d8b41
+:END:
+=M-x pdf-present= in a PDF buffer starts a slide show from the page you are on. It opens two frames that always show the same slide:
+
+- the *audience frame*: the current slide alone, full screen, with no mode line or fringes, on another monitor than the one Emacs is on (set ~pdf-present-audience-monitor~ to a monitor number or name such as ="HDMI-1"=, or use =C-u M-x pdf-present= to choose);
+- the *presenter frame*: the current slide, the next slide, the speaker notes, the slide counter (with the PDF's page labels, if it has any), the elapsed time and the clock.
+
+With a single monitor, the audience frame opens as a normal window, which is handy for rehearsing. Quitting deletes both frames and puts the PDF buffer and its windows back as they were.
+
+Speaker notes are taken from the PDF, as set by ~pdf-present-notes-layout~:
+
+| Layout           | Beamer option                                         | How it is shown                                                                                                                                                           |
+|------------------+-------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| ~second-screen~  | =\setbeameroption{show notes on second screen=right}= | Each page is slide (left half) and notes (right half); the audience sees the left half only.                                                                              |
+| ~notes-pages~    | =\setbeameroption{show notes}=                        | The notes page after a slide goes to the notes window; the audience never sees it.                                                                                        |
+| ~none~           | (no notes)                                            | Every page is a slide.                                                                                                                                                    |
+| ~auto~ (default) |                                                       | ~second-screen~ if the pages are at least ~pdf-present-second-screen-ratio~ (2.4) times as wide as tall, ~notes-pages~ if Beamer notes pages are found, otherwise ~none~. |
+
+*** Keybindings for presenting slides
+:PROPERTIES:
+:CREATED:  [2026-10-27 Tue 14:45]
+:ID:       5e2a9c4b-71d3-4f08-b6e2-8a4d0f3c9e17
+:END:
+These work in both frames. The page and arrow keys are what most presentation clickers send.
+
+| Presenting slides        |                                                  |
+|--------------------------+--------------------------------------------------|
+| Next slide               | ~n~, ~SPC~, ~RET~, ~<next>~, ~<right>~, ~<down>~ |
+| Previous slide           | ~p~, ~DEL~, ~S-SPC~, ~<prior>~, ~<left>~, ~<up>~ |
+| First / last slide       | ~<~ / ~>~, ~<home>~ / ~<end>~                    |
+| Go to slide number       | ~g~ (or a prefix argument: ~C-u 12 g~)           |
+| Black screen on/off      | ~b~, ~.~                                         |
+| White screen on/off      | ~w~, ~,~                                         |
+| Pause / resume the timer | ~t~                                              |
+| Reset the timer          | ~r~                                              |
+| End the presentation     | ~q~                                              |
 
 ** Miscellaneous features
 :PROPERTIES:
