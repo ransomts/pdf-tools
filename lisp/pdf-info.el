@@ -663,7 +663,15 @@ interrupted."
                                                (split-string r " " t)))
                                      rest)))))
              ((memq (cdr (assoc 'type a1)) '(square circle))
-              (setq a3 `((interior-color . ,(not-empty (car rest)))))))))))
+              (setq a3 `((interior-color . ,(not-empty (car rest))))))
+             ((and (eq (cdr (assoc 'type a1)) 'free-text) rest)
+              (cl-destructuring-bind (font-name font-size font-color)
+                  rest
+                (setq a3
+                      `((font-name . ,(not-empty font-name))
+                        (font-size . ,(let ((s (not-empty font-size)))
+                                        (and s (string-to-number s))))
+                        (font-color . ,(not-empty font-color)))))))))))
       (append a1 a2 a3))))
 
 (defun pdf-info-query--transform-attachment (a)
@@ -1028,6 +1036,14 @@ A No-op, if BUFFER has not running server instance."
   "Return non-nil, if stamp annotations can be created."
   (not (null (memq 'stamp-annotations (pdf-info-features)))))
 
+(defun pdf-info-free-text-annotations-p ()
+  "Return non-nil, if free text annotations can be created."
+  (not (null (memq 'free-text-annotations (pdf-info-features)))))
+
+(defun pdf-info-ink-annotations-p ()
+  "Return non-nil, if ink annotations can be created."
+  (not (null (memq 'ink-annotations (pdf-info-features)))))
+
 (defmacro pdf-info-assert-writable-annotations ()
   `(unless (memq 'writable-annotations (pdf-info-features))
      (error "Writing annotations is not supported by this version of epdfinfo")))
@@ -1055,7 +1071,11 @@ when creating a stamp, not set afterwards.")
               (and (memq 'shape-annotations features)
                    (list 'square 'circle 'line))
               (and (memq 'stamp-annotations features)
-                   (list 'stamp))))
+                   (list 'stamp))
+              (and (memq 'free-text-annotations features)
+                   (list 'free-text))
+              (and (memq 'ink-annotations features)
+                   (list 'ink))))
      (t (list 'text)))))
 
 (defun pdf-info-open (&optional file-or-buffer password)
@@ -1448,10 +1468,17 @@ Square and circle annotations have an additional key
 
 interior-color - The color it is filled with, or nil.
 
-and stamp annotations
+stamp annotations
 
 icon - The name of its standard icon, e.g. \"Approved\", or nil for
-       a Draft or custom stamp.  Stamps have no markup keys." ;FIXME: Use symbols ?
+       a Draft or custom stamp.  Stamps have no markup keys.
+
+and free text annotations, which display their contents on the page,
+
+font-name  - The font family of the text, e.g. \"Helvetica\".
+font-size  - Its size in points.
+font-color - The color of the text, while color is the one of the
+             background." ;FIXME: Use symbols ?
 
   (let ((pages (pdf-info-normalize-page-range pages)))
     (pdf-info-query
@@ -1488,8 +1515,11 @@ For a `line' it may be a single list \(X1 Y1 X2 Y2\) of its
 start and end point, which then also determines its edges;
 otherwise the line goes from the top-left to the bottom-right
 corner of EDGES.  For a `stamp' it may be a single string naming
-one of `pdf-info-standard-stamp-icons'.  Other types take no
-MARKUP-EDGES.
+one of `pdf-info-standard-stamp-icons'.  For `ink' these are the
+strokes, each a list \(X1 Y1 X2 Y2 ...\) of the points the pen
+went through, optionally preceded by the line width in points as
+a string; the strokes then determine the edges.  Other types,
+like `free-text', take no MARKUP-EDGES.
 
 See `pdf-info-getannots' for the kind of value of this function
 returns."
@@ -1545,8 +1575,10 @@ MODIFICATIONS is an alist of properties and their new values.
 Besides the common properties like `color', `contents' and
 `edges', square and circle annotations accept `interior-color'
 \(nil removes it\), line annotations `line', a list \(X1 Y1 X2
-Y2\) of new start and end points, and stamp annotations `icon',
-one of `pdf-info-standard-stamp-icons' except \"Draft\".
+Y2\) of new start and end points, stamp annotations `icon',
+one of `pdf-info-standard-stamp-icons' except \"Draft\", and free
+text annotations `font-name', `font-size' and `font-color'.  Ink
+annotations keep their size, when their `edges' change.
 
 The server must support modifying annotations for this to work."
 
@@ -1561,6 +1593,11 @@ The server must support modifying annotations for this to work."
               (interior-color
                (list (car elt)
                      (if (cdr elt) (pdf-util-hexcolor (cdr elt)) "")))
+              (font-color
+               (list (car elt)
+                     (pdf-util-hexcolor (cdr elt))))
+              (font-size
+               (list (car elt) (number-to-string (cdr elt))))
               ((edges line)
                (list (car elt)
                      (mapconcat 'number-to-string (cdr elt) " ")))
