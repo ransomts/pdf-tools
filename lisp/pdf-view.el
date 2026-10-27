@@ -371,6 +371,7 @@ regarding display of the region in the later function.")
   "Keymap used by `pdf-view-mode' when displaying a doc as a set of images.")
 
 (defvar pdf-tools-enabled-modes)
+(defvar epa-inhibit)
 (define-derived-mode pdf-view-mode special-mode "PDFView"
   "Major mode in PDF buffers.
 
