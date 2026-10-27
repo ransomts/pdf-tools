@@ -236,6 +236,10 @@ See `pdf-links-action-perform' for the interface."
          (keys (pdf-links-read-link-action--create-keys
                 (apply #'+ (mapcar #'length links))))
          (alist (cl-mapcar 'cons keys (apply #'append links)))
+         ;; LINKS has one list per page, so check that some page has
+         ;; one, and do so before computing colors.
+         (_ (unless (cl-some #'identity links)
+              (error "No links on displayed pages")))
          (colors (pdf-util-face-colors
                   'pdf-links-read-link pdf-view-dark-minor-mode)))
     (if (not links)
