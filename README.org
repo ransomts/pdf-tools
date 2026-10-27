@@ -514,6 +514,8 @@ Note that this overwrites the PDF file visited in the buffer from which it is ru
 :CREATED:  [2021-12-29 Wed 18:34]
 :ID:       fd64c10c-4ea5-4ece-8d95-b723098dd4f6
 :END:
+See [[file:CONTRIBUTING.org][CONTRIBUTING.org]] for how the code fits together, how to build and check it, and what a pull request needs.
+
 ** Turn on debug mode
 :PROPERTIES:
 :CREATED:  [2021-12-29 Wed 18:34]
