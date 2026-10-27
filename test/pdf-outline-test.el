@@ -199,13 +199,7 @@
         (should (= (point) (save-excursion (back-to-indentation) (point))))))))
 
 (ert-deftest pdf-outline-move-to-page-after-last-item ()
-  ;; BUG: `pdf-outline-position-of-page' returns the first item whose
-  ;; page is >= PAGE, or the end of the buffer if there is none.  On a
-  ;; page after the last outline item (page 6 here) point therefore
-  ;; ends up on the empty line after the outline instead of on the
-  ;; last item; more generally a page without its own item selects the
-  ;; following section rather than the one containing the page.
-  :expected-result :failed
+  ;; A page after the last item belongs to the last item's section.
   (pdf-outline-test-with-pdf
     (with-current-buffer (pdf-outline-noselect)
       (goto-char (point-min))

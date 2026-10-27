@@ -426,13 +426,19 @@ Then quit the outline window."
   (back-to-indentation))
 
 (defun pdf-outline-position-of-page (page)
-  (let (curpage)
-    (save-excursion
-      (goto-char (point-min))
+  "Return the position of the outline item of the section containing PAGE.
+
+That is the first item on PAGE, if there is one, otherwise the last
+item before it, or the first item if PAGE comes before all of them."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((pos (point))
+          curpage)
       (while (and (setq curpage (alist-get 'page (pdf-outline-link-at-pos)))
                   (< curpage page))
+        (setq pos (point))
         (forward-line))
-      (point))))
+      (if (eql curpage page) (point) pos))))
 
 
 
