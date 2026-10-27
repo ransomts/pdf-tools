@@ -2084,22 +2084,25 @@ annotation_print (const annotation_t *annot, /* const */ PopplerPage *page)
 
   /* <<< Any Annotation <<< */
 
+#ifdef HAVE_POPPLER_ANNOT_STAMP
+  /* >>> Stamp Annotation >>> */
+  /* Older poppler-glib makes stamps plain annotations, newer (26.01)
+     markup annotations.  Print the same fields either way. */
+  if (POPPLER_IS_ANNOT_STAMP (a))
+    {
+      /* Stamp Icon */
+      putchar (':');
+      print_response_string (xpoppler_annot_stamp_icon_string
+                             (poppler_annot_stamp_get_icon
+                              (POPPLER_ANNOT_STAMP (a))), NEWLINE);
+      goto theend;
+    }
+  /* <<< Stamp Annotation <<< */
+#endif
+
   /* >>> Markup Annotation >>> */
   if (! POPPLER_IS_ANNOT_MARKUP (a))
     {
-#ifdef HAVE_POPPLER_ANNOT_STAMP
-      /* poppler-glib does not treat stamps as markup annotations. */
-      if (POPPLER_IS_ANNOT_STAMP (a))
-        {
-          /* >>> Stamp Annotation >>> */
-          /* Stamp Icon */
-          putchar (':');
-          print_response_string (xpoppler_annot_stamp_icon_string
-                                 (poppler_annot_stamp_get_icon
-                                  (POPPLER_ANNOT_STAMP (a))), NONE);
-          /* <<< Stamp Annotation <<< */
-        }
-#endif
       putchar ('\n');
       goto theend;
     }
