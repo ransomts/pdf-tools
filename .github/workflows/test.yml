@@ -2,7 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    # tim: this fork's integration branch (fork-only change).
+    branches: [master, tim]
   pull_request:
     branches: [master]
 
