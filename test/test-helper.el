@@ -63,15 +63,18 @@
 (defmacro pdf-test-with-pdf (pdf-filename &rest body)
   (declare (indent 0) (debug t))
   (let ((buffer (make-symbol "buffer")))
-    `(let ((,buffer (find-file-noselect
-                     (expand-file-name ,pdf-filename)))
-           (pdf-info-epdfinfo-error-filename (make-temp-file "epdfinfo.log")))
+    `(let ((pdf-info-epdfinfo-error-filename (make-temp-file "epdfinfo.log"))
+           ,buffer)
        (unwind-protect
            (progn
+             ;; Start the server before visiting the file: the previous
+             ;; test quit it, and `pdf-view-mode' needs it.
              (pdf-info-quit)
              (pdf-info-process-assert-running t)
+             (setq ,buffer (find-file-noselect
+                            (expand-file-name ,pdf-filename)))
              (with-current-buffer ,buffer ,@body))
-         (when (buffer-live-p ,buffer)
+         (when (and ,buffer (buffer-live-p ,buffer))
            (with-current-buffer ,buffer
              (set-buffer-modified-p nil)
              (let (kill-buffer-hook)
@@ -88,7 +91,12 @@
   `(pdf-test-with-pdf "test.pdf" ,@body))
 
 (defmacro pdf-test-with-encrypted-pdf (&rest body)
-  `(pdf-test-with-pdf "encrypted.pdf" ,@body))
+  ;; The tests open it with the server themselves, with and without
+  ;; the password; visit it without `pdf-view-mode', which would open
+  ;; it first and prompt for the password.
+  `(let ((auto-mode-alist nil)
+         (magic-mode-alist nil))
+     (pdf-test-with-pdf "encrypted.pdf" ,@body)))
 
 ;; ---
 (require 'undercover)
@@ -97,6 +105,8 @@
 (require 'pdf-info)
 (require 'ert)
 (require 'pdf-tools)
+;; Visit PDF files in `pdf-view-mode', as an installed PDF Tools does.
+(pdf-tools-install-noverify)
 
 ;; FIXME: Can't be compiled with the Package-Requires dependencies alone.
 ;; Local Variables:
