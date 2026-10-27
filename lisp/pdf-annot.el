@@ -466,9 +466,9 @@ For `interior-color' the menu also offers to remove the color."
                                                       (remove color pdf-annot-color-history)))
                                           (quit-window t)))
                                   (list 'function callback))))))
-    (dolist (color (butlast (reverse pdf-annot-color-history)
-                            (max 0 (- (length pdf-annot-color-history)
-                                      12))))
+    ;; The 12 most recent colors.  The history is most-recent-first and
+    ;; menu items show up in the reverse order of their definition.
+    (dolist (color (reverse (seq-take pdf-annot-color-history 12)))
       (define-key menu (vector (intern (format "color-%s" color)))
                   `(menu-item ,color
                               ,(lambda nil

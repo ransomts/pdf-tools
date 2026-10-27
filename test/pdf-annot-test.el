@@ -760,13 +760,6 @@ t or nil signals an error."
 
 (ert-deftest pdf-annot-test-color-submenu-keeps-recent-colors ()
   "The color submenu offers the most recently used colors."
-  ;; BUG: `pdf-annot-create-color-submenu' trims the history with
-  ;; (butlast (reverse pdf-annot-color-history) N).  The history is
-  ;; most-recent-first, so the reversed list is oldest-first and
-  ;; `butlast' drops the N *most recent* colors.  With 13 colors in the
-  ;; history, the color used last is missing from the menu while the
-  ;; oldest one is offered.
-  :expected-result :failed
   (pdf-annot-test-with-pdf "test.pdf"
     (let* ((pdf-annot-color-history
             (cl-loop for i from 1 to 13 collect (format "#0000%02d" i)))
