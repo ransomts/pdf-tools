@@ -29,6 +29,8 @@ The ~pdf-tools~ Wiki is maintained at https://pdftools.wiki. Head to the site if
     - [[#keybindings-for-manipulating-display-of-pdf][Keybindings for manipulating display of PDF]]
   - [[#annotations][Annotations]]
     - [[#keybindings-for-working-with-annotations][Keybindings for working with Annotations]]
+  - [[#page-operations][Page operations]]
+    - [[#keybindings-for-page-operations][Keybindings for page operations]]
   - [[#working-with-auctex][Working with AUCTeX]]
     - [[#keybindings-for-working-with-auctex][Keybindings for working with AUCTeX]]
   - [[#miscellaneous-features][Miscellaneous features]]
@@ -234,6 +236,7 @@ This also applies when updating via MELPA / NonGNU ELPA (except for running the 
 + Outline :: Use ~imenu~ or a special buffer (=M-x pdf-outline=) to examine and navigate the PDF's outline.
 + SyncTeX :: Jump from a position on a page directly to the TeX source and vice versa.
 + Virtual :: Use a collection of documents as if it were one, big single PDF.
++ Pages :: Delete, extract, move and rotate pages, and insert pages of other PDFs, changing the file itself (needs the =qpdf= program). [[id:7740dc50-5c1c-4d94-b896-264066d06efa][More information here]].
 + Misc ::
   - Display PDF's metadata.
   - Mark a region and kill the text from the PDF.
@@ -372,6 +375,37 @@ You can customize the appearance with:
 |--------------------------------------+----------------------------------------------------|
 |                                      |                                                    |
 
+** Page operations
+:PROPERTIES:
+:ID:       7740dc50-5c1c-4d94-b896-264066d06efa
+:END:
+~pdf-pages-minor-mode~ changes the pages of the visited PDF file: delete pages from a scan, extract a few pages into a new file, move pages, rotate sideways pages, or insert another PDF (for example to assemble an exam). Poppler cannot rewrite a document's page tree, so these commands use the [[https://qpdf.sourceforge.io/][qpdf]] command line program, version 8.4 or later. Install it, or point ~pdf-pages-qpdf-program~ at it.
+
+The commands work on the current page. A numeric prefix argument /N/ selects /N/ pages starting at the current one, and ~C-u~ asks for a page range in qpdf syntax, e.g. =3-5,8,10-z= (=z= is the last page).
+
+- A buffer with unsaved annotations or form fields is never changed: you are offered to save it first.
+- qpdf writes a new file next to the original, which replaces it only if qpdf succeeded and the result has the expected number of pages; a failure leaves the file as it was.
+- ~pdf-pages-undo~ restores the version before the last operation (up to ~pdf-pages-undo-limit~ of them in one Emacs session).
+- Deleting pages and undoing ask for confirmation, see ~pdf-pages-confirm~.
+- Encrypted files keep their encryption. qpdf gets the password from the password cache the viewer uses, or asks for it.
+
+*** Keybindings for page operations
+:PROPERTIES:
+:ID:       ac9f1f7b-63b9-4f96-8304-fd3ff15f6fc3
+:END:
+| Page operations                       |             |
+|---------------------------------------+-------------|
+| Delete page(s)                        | ~C-c C-o d~ |
+| Extract page(s) to a new file         | ~C-c C-o x~ |
+| Move page(s) to a position            | ~C-c C-o m~ |
+| Rotate page(s) clockwise              | ~C-c C-o r~ |
+| Rotate page(s) counterclockwise       | ~C-c C-o l~ |
+| Insert pages of a PDF after this page | ~C-c C-o i~ |
+| Append pages of a PDF                 | ~C-c C-o a~ |
+| Undo the last page operation          | ~C-c C-o u~ |
+
+The prefix is ~pdf-pages-minor-mode-map-prefix~.
+
 ** Working with AUCTeX
 :PROPERTIES:
 :CREATED:  [2021-12-30 Thu 18:37]
@@ -506,6 +540,7 @@ Note that this overwrites the PDF file visited in the buffer from which it is ru
 - [[brain-child:01864499-2286-4e64-91f5-f8133f53ec61][Keybindings for navigating PDF documents]]
 - [[brain-child:243b3843-b912-430b-884a-641304755b92][Keybindings for working with Annotations]]
 - [[brain-child:73a18ea8-aa21-48d4-9d8b-dc64e3601000][Keybindings for manipulating display of PDF]]
+- [[brain-child:ac9f1f7b-63b9-4f96-8304-fd3ff15f6fc3][Keybindings for page operations]]
 - [[brain-child:ab7872c1-edd6-465d-9d1d-b621db6364a3][Keybindings for working with AUCTeX]]
 - [[brain-child:9148deff-dd5a-46be-a48f-cd2f96b7ce19][Keybindings for miscellaneous features in PDF tools]]
 
