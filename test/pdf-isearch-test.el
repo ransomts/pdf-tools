@@ -57,6 +57,9 @@ Defaults to the whole page, as with a window that fits the page.")
   "Like `pdf-isearch-test-with-displayed-pdf', with drawing recorded."
   (declare (indent 0) (debug t))
   `(pdf-isearch-test-with-displayed-pdf
+     ;; `pdf-isearch-active-mode' sets this, and only a real isearch
+     ;; session resets it; keep it from leaking into later tests.
+     (let ((overriding-terminal-local-map overriding-terminal-local-map))
      (cl-letf (((symbol-function 'pdf-isearch-hl-matches)
                 (lambda (&rest args) (push args pdf-isearch-test--highlighted)))
                ((symbol-function 'pdf-isearch-focus-match)
@@ -64,7 +67,7 @@ Defaults to the whole page, as with a window that fits the page.")
        (setq pdf-isearch-test--highlighted nil
              pdf-isearch-test--focused nil)
        (pdf-isearch-minor-mode 1)
-       ,@body)))
+       ,@body))))
 
 (defmacro pdf-isearch-test-with-search-state (spec &rest body)
   "Bind the isearch variables of SPEC around BODY.
