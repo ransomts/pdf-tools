@@ -346,7 +346,7 @@ You can customize the appearance with:
 :CREATED:  [2021-12-30 Thu 16:58]
 :ID:       5fff6471-a933-46d7-8ae9-b2fa4a9de952
 :END:
-~pdf-tools~ supports working with PDF Annotations. You can display and list text and markup annotations (like squiggly, highlight), edit their contents and attributes (e.g. color), move them around, delete them or create new ones and then save the modifications back to the PDF file.
+~pdf-tools~ supports working with PDF Annotations. You can display and list text, markup (like squiggly, highlight), shape (square, circle, line) and stamp annotations, edit their contents and attributes (e.g. color), move them around, delete them or create new ones and then save the modifications back to the PDF file.
 *** Keybindings for working with Annotations
 :PROPERTIES:
 :CREATED:  [2021-12-30 Thu 17:08]
@@ -371,9 +371,17 @@ You can customize the appearance with:
 | Add a Squiggly Markup Annotation     | ~C-c C-a s~                                        |
 | Add an Underline Markup Annotation   | ~C-c C-a u~                                        |
 | Add a Text Annotation                | ~C-c C-a t~                                        |
+| Add a Square (Rectangle) Annotation  | ~C-c C-a r~                                        |
+| Add a Circle Annotation              | ~C-c C-a c~                                        |
+| Add a Line Annotation                | ~C-c C-a L~                                        |
+| Add a Stamp Annotation               | ~C-c C-a S~                                        |
 |--------------------------------------+----------------------------------------------------|
 | Highlight an arbitrary region        | Section region with Mouse Drag (Hold down Meta and |
 |                                      | drag). Then ~C-c C-a h~ to highlight that region.  |
+|--------------------------------------+----------------------------------------------------|
+| Draw a shape or stamp                | Select a region with Mouse Drag, then ~C-c C-a r~, |
+|                                      | ~c~, ~L~ or ~S~. A line goes from where the drag   |
+|                                      | started to where it ended.                         |
 |--------------------------------------+----------------------------------------------------|
 |                                      |                                                    |
 
