@@ -1895,6 +1895,19 @@ annotation_new (const epdfinfo_t *ctx, document_t *doc, PopplerPage *page,
   return a;
 }
 
+/* Return TRUE if A is a markup annotation as far as epdfinfo is
+   concerned.  Newer poppler-glib (26.01) makes stamps markup
+   annotations; keep treating them as plain ones with every version. */
+static gboolean
+annotation_is_markup (PopplerAnnot *a)
+{
+#ifdef HAVE_POPPLER_ANNOT_STAMP
+  if (POPPLER_IS_ANNOT_STAMP (a))
+    return FALSE;
+#endif
+  return POPPLER_IS_ANNOT_MARKUP (a);
+}
+
 static gboolean
 annotation_edit_validate (const epdfinfo_t *ctx, const command_arg_t *rest,
                           PopplerAnnot *annotation, char **error_msg)
@@ -1932,25 +1945,25 @@ annotation_edit_validate (const epdfinfo_t *ctx, const command_arg_t *rest,
         }
       else if (! strcmp (key, "label"))
         {
-          cerror_if_not (POPPLER_IS_ANNOT_MARKUP (annotation), error_msg,
+          cerror_if_not (annotation_is_markup (annotation), error_msg,
                          error_fmt, key, "markup");
           atype = ARG_STRING;
         }
       else if (! strcmp (key, "opacity"))
         {
-          cerror_if_not (POPPLER_IS_ANNOT_MARKUP (annotation), error_msg,
+          cerror_if_not (annotation_is_markup (annotation), error_msg,
                          error_fmt, key, "markup");
           atype = ARG_EDGE;
         }
       else if (! strcmp (key, "popup"))
         {
-          cerror_if_not (POPPLER_IS_ANNOT_MARKUP (annotation), error_msg,
+          cerror_if_not (annotation_is_markup (annotation), error_msg,
                          error_fmt, key, "markup");
           atype = ARG_EDGES;
         }
       else if (! strcmp (key, "popup-is-open"))
         {
-          cerror_if_not (POPPLER_IS_ANNOT_MARKUP (annotation), error_msg,
+          cerror_if_not (annotation_is_markup (annotation), error_msg,
                          error_fmt, key, "markup");
           atype = ARG_BOOL;
         }
