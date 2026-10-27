@@ -9,6 +9,9 @@ on:
 jobs:
   test-ubuntu:
     runs-on: ubuntu-latest
+    # The snapshot breaks things (currently Cask itself) without
+    # notice; report it, but don't fail the run for it.
+    continue-on-error: ${{ matrix.emacs-version == 'snapshot' }}
     strategy:
       fail-fast: false
       matrix:
