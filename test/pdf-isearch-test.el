@@ -509,7 +509,11 @@ SPEC is a plist with :forward, :regexp, :case-fold and :word."
   (pdf-isearch-test-with-displayed-pdf
     (let (calls)
       (cl-letf (((symbol-function 'pdf-info-renderpage-text-regions)
-                 (lambda (&rest args) (push args calls))))
+                 (lambda (&rest args) (push args calls)))
+                ;; The colours are not under test, and looking them up
+                ;; may need a frame, which batch Emacs does not have.
+                ((symbol-function 'pdf-util-face-colors)
+                 (lambda (&rest _) '("black" . "yellow"))))
         (pdf-isearch-hl-matches
          pdf-isearch-test--m2
          (list (list pdf-isearch-test--m1 pdf-isearch-test--m2
@@ -533,7 +537,11 @@ SPEC is a plist with :forward, :regexp, :case-fold and :word."
     (pdf-view-goto-page 2)
     (let (calls)
       (cl-letf (((symbol-function 'pdf-info-renderpage-text-regions)
-                 (lambda (&rest args) (push args calls))))
+                 (lambda (&rest args) (push args calls)))
+                ;; The colours are not under test, and looking them up
+                ;; may need a frame, which batch Emacs does not have.
+                ((symbol-function 'pdf-util-face-colors)
+                 (lambda (&rest _) '("black" . "yellow"))))
         (pdf-isearch-hl-matches
          pdf-isearch-test--m3
          (list (list pdf-isearch-test--m1) (list pdf-isearch-test--m3))
