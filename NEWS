@@ -25,6 +25,8 @@
 
 ** Functionality improvements and fixes
 - Annotation colors no longer get slightly darker each time a document is saved and reopened.
+- Fix: A mouse click no longer activates an empty region #342
+  + ~pdf-view-active-region-p~ was true after any click in the page, even without a selection. A click now only deselects, and ~C-mouse-1~ again adds to the active region instead of replacing it.
 
 ** API changes (for package developers)
 - New server commands ~structure~, ~fonts~ and ~xmpmetadata~, with the wrappers ~pdf-info-structure~, ~pdf-info-fonts~ and ~pdf-info-xmp-metadata~.
