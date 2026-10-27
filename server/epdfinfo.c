@@ -2046,9 +2046,14 @@ cmd_features (const epdfinfo_t *ctx, const command_arg_t *args)
     "no-form-reset",
 #endif
 #ifdef HAVE_POPPLER_SIGNATURES
-    "signatures"
+    "signatures",
 #else
-    "no-signatures"
+    "no-signatures",
+#endif
+#ifdef HAVE_POPPLER_SIGNING
+    "signing"
+#else
+    "no-signing"
 #endif
   };
   int i;
@@ -3557,6 +3562,70 @@ cmd_setformfield_text (const epdfinfo_t *ctx, const command_arg_t *args)
   if (field) g_object_unref (field);
 }
 
+#ifdef HAVE_POPPLER_SIGNING
+/* The NSS database directory epdfinfo opened, "" for poppler's
+   default, or NULL if it has not been opened yet.  NSS opens it
+   only once per process. */
+static gchar *nss_dir;
+
+/* The password for the NSS database, while a command may need it. */
+static const char *nss_password;
+
+/* The token NSS last asked a password for during this command. */
+static gchar *nss_password_token;
+
+/* Whether NSS asked for a password we did not have, respectively
+   asked again after the one we gave it failed. */
+static gboolean nss_password_missing, nss_password_wrong;
+
+/* Note that NSS is about to open whatever database it opens. */
+static void
+nss_opened (void)
+{
+  if (! nss_dir)
+    nss_dir = g_strdup ("");
+}
+
+static char *
+nss_password_callback (const gchar *token)
+{
+  if (nss_password_token && ! g_strcmp0 (token, nss_password_token))
+    {
+      /* NSS asks again, so the password was wrong. */
+      nss_password_wrong = TRUE;
+      return NULL;
+    }
+  g_free (nss_password_token);
+  nss_password_token = g_strdup (token);
+  if (! nss_password || ! *nss_password)
+    {
+      nss_password_missing = TRUE;
+      return NULL;
+    }
+  /* NSS frees it. */
+  return strdup (nss_password);
+}
+
+/* Make PASSWORD, or none if it is empty, the NSS database's
+   password for the current command. */
+static void
+nss_begin (const char *password)
+{
+  nss_opened ();
+  nss_password = password;
+  g_free (nss_password_token);
+  nss_password_token = NULL;
+  nss_password_missing = nss_password_wrong = FALSE;
+  poppler_set_nss_password_callback (nss_password_callback);
+}
+
+static void
+nss_end (void)
+{
+  nss_password = NULL;
+}
+#endif  /* HAVE_POPPLER_SIGNING */
+
 #ifdef HAVE_POPPLER_SIGNATURES
 
 static const char *
@@ -3607,9 +3676,9 @@ print_date_time (GDateTime *time, enum suffix_char suffix)
    subject subject-organization issuer issuer-organization expires
 
    The statuses are one of valid, invalid, digest-mismatch,
-   decoding-error, not-found or error, respectively trusted,
-   untrusted-issuer, unknown-issuer, revoked, expired, not-verified
-   or error.  Times are in ISO 8601 format.  The certificate's
+   decoding-error, not-found (the field is not signed) or error,
+   respectively trusted, untrusted-issuer, unknown-issuer, revoked,
+   expired, not-verified or error.  Times are in ISO 8601 format.  The certificate's
    revocation is not checked online.
 
    Errors: If there is no such field or it is not a signature field.
@@ -3629,12 +3698,18 @@ cmd_validatesignature (const epdfinfo_t *ctx, const command_arg_t *args)
   PopplerFormField *field = poppler_document_get_form_field (doc, id);
   PopplerSignatureInfo *info = NULL;
   PopplerCertificateInfo *cert;
+  PopplerSignatureStatus status;
+  const gchar *signer, *subject;
+  gboolean unsigned_field;
   GError *gerror = NULL;
 
   perror_if_not (field, "No such form field: %d", id);
   perror_if_not (poppler_form_field_get_field_type (field)
                  == POPPLER_FORM_FIELD_SIGNATURE,
                  "Not a signature field: %d", id);
+#ifdef HAVE_POPPLER_SIGNING
+  nss_opened ();
+#endif
   info = poppler_form_field_signature_validate_sync
     (field,
      POPPLER_SIGNATURE_VALIDATION_FLAG_VALIDATE_CERTIFICATE
@@ -3643,14 +3718,22 @@ cmd_validatesignature (const epdfinfo_t *ctx, const command_arg_t *args)
   perror_if_not (info, "Unable to validate signature: %s",
                  gerror ? gerror->message : "?");
   cert = poppler_signature_info_get_certificate_info (info);
+  status = poppler_signature_info_get_signature_status (info);
+  /* Poppler reports an error (generic, or not verified, depending on
+     its version), and neither signer nor certificate, for a field
+     nobody signed yet. */
+  signer = poppler_signature_info_get_signer_name (info);
+  subject = cert ? poppler_certificate_info_get_subject_common_name (cert) : NULL;
+  unsigned_field = (! strcmp (signature_status_string (status), "error")
+                    && (! signer || ! *signer) && (! subject || ! *subject));
 
   OK_BEGIN ();
-  printf ("%s:", signature_status_string
-          (poppler_signature_info_get_signature_status (info)));
+  printf ("%s:", unsigned_field ? "not-found" : signature_status_string (status));
   printf ("%s:", certificate_status_string
           (poppler_signature_info_get_certificate_status (info)));
-  print_response_string (poppler_signature_info_get_signer_name (info), COLON);
-  print_date_time (poppler_signature_info_get_local_signing_time (info), COLON);
+  print_response_string (signer, COLON);
+  print_date_time (unsigned_field ? NULL
+                   : poppler_signature_info_get_local_signing_time (info), COLON);
   print_response_string (cert ? poppler_certificate_info_get_subject_common_name (cert) : NULL, COLON);
   print_response_string (cert ? poppler_certificate_info_get_subject_organization (cert) : NULL, COLON);
   print_response_string (cert ? poppler_certificate_info_get_issuer_common_name (cert) : NULL, COLON);
@@ -3665,6 +3748,215 @@ cmd_validatesignature (const epdfinfo_t *ctx, const command_arg_t *args)
 }
 
 #endif  /* HAVE_POPPLER_SIGNATURES */
+
+#ifdef HAVE_POPPLER_SIGNING
+
+/* Name: setnssdir
+   Args: directory
+   Returns: Nothing
+   Errors: If NSS already opened a different database.
+
+   Use the NSS database in directory, or poppler's default one if
+   directory is empty, for signing and validating signatures.  NSS
+   opens its database once per process, so this has to come before
+   any other command that uses it.
+*/
+
+const command_arg_type_t cmd_setnssdir_spec[] =
+  {
+    ARG_STRING                  /* directory */
+  };
+
+static void
+cmd_setnssdir (const epdfinfo_t *ctx, const command_arg_t *args)
+{
+  const char *dir = args[0].value.string;
+
+  if (! nss_dir)
+    {
+      poppler_set_nss_dir (dir);
+      nss_dir = g_strdup (dir);
+    }
+  else
+    perror_if_not (! strcmp (nss_dir, dir),
+                   "The NSS database %s is already open, restart epdfinfo"
+                   " to use another one", *nss_dir ? nss_dir : "(default)");
+
+  OK_BEGIN ();
+  OK_END ();
+
+ error:
+  return;
+}
+
+/* Report a missing or wrong NSS password, if NSS asked for one. */
+#define nss_perror_if_password()                                        \
+  do {                                                                  \
+    perror_if_not (! nss_password_wrong, "%s", "Wrong NSS password");   \
+    perror_if_not (! nss_password_missing, "%s", "NSS password required"); \
+  } while (0)
+
+/* Name: signingcertificates
+   Args: password
+   Returns: The certificates available for signing, one per line:
+
+   id subject subject-organization subject-email issuer expires
+
+   where id is the certificate's nickname, subject and issuer are
+   common names and expires is an ISO 8601 time.
+
+   Errors: NSS password required, if the NSS database has a password
+   and password is empty, Wrong NSS password, if it is the wrong one.
+*/
+
+const command_arg_type_t cmd_signingcertificates_spec[] =
+  {
+    ARG_STRING                  /* password */
+  };
+
+static void
+cmd_signingcertificates (const epdfinfo_t *ctx, const command_arg_t *args)
+{
+  GList *certs, *item;
+
+  nss_begin (args[0].value.string);
+  certs = poppler_get_available_signing_certificates ();
+  nss_perror_if_password ();
+
+  OK_BEGIN ();
+  for (item = certs; item; item = item->next)
+    {
+      PopplerCertificateInfo *cert = item->data;
+
+      print_response_string (poppler_certificate_info_get_id (cert), COLON);
+      print_response_string (poppler_certificate_info_get_subject_common_name (cert), COLON);
+      print_response_string (poppler_certificate_info_get_subject_organization (cert), COLON);
+      print_response_string (poppler_certificate_info_get_subject_email (cert), COLON);
+      print_response_string (poppler_certificate_info_get_issuer_common_name (cert), COLON);
+      print_date_time (poppler_certificate_info_get_expiration_time (cert), NEWLINE);
+    }
+  OK_END ();
+
+ error:
+  nss_end ();
+  g_list_free_full (certs, (GDestroyNotify) poppler_certificate_info_free);
+}
+
+typedef struct
+{
+  gboolean done;
+  gboolean ok;
+  GError *error;
+} sign_result_t;
+
+static void
+sign_ready (GObject *source, GAsyncResult *result, gpointer user_data)
+{
+  sign_result_t *res = user_data;
+
+  res->ok = poppler_document_sign_finish (POPPLER_DOCUMENT (source),
+                                          result, &res->error);
+  res->done = TRUE;
+}
+
+/* Name: sign
+   Args: filename page edges certificate field destination reason
+         location text text-left password
+   Returns: Nothing
+   Errors: If the page or certificate does not exist, if the NSS
+   password is missing or wrong (see signingcertificates), or if
+   signing fails.
+
+   Writes a copy of the document to destination, with a new signature
+   field named field in the rectangle edges of page, signed with the
+   certificate whose id (nickname) is certificate.  Text is shown in
+   the field and text-left on its left half.  Reason, location and
+   the texts may be empty.  The document itself is not changed.
+*/
+
+const command_arg_type_t cmd_sign_spec[] =
+  {
+    ARG_DOC,
+    ARG_NATNUM,                 /* page number */
+    ARG_EDGES,                  /* rectangle */
+    ARG_NONEMPTY_STRING,        /* certificate id */
+    ARG_NONEMPTY_STRING,        /* field name */
+    ARG_NONEMPTY_STRING,        /* destination filename */
+    ARG_STRING,                 /* reason */
+    ARG_STRING,                 /* location */
+    ARG_STRING,                 /* signature text */
+    ARG_STRING,                 /* signature text, left */
+    ARG_STRING                  /* NSS password */
+  };
+
+static void
+cmd_sign (const epdfinfo_t *ctx, const command_arg_t *args)
+{
+  PopplerDocument *doc = args[0].value.doc->pdf;
+  int pn = args[1].value.natnum;
+  PopplerRectangle r = args[2].value.rectangle;
+  const char *cert_id = args[3].value.string;
+  const char *reason = args[6].value.string;
+  const char *location = args[7].value.string;
+  const char *text = args[8].value.string;
+  const char *text_left = args[9].value.string;
+  PopplerPage *page = NULL;
+  PopplerCertificateInfo *cert = NULL;
+  PopplerSigningData *data = NULL;
+  PopplerRectangle rect;
+  sign_result_t res = {0};
+  double width, height;
+
+  nss_begin (args[10].value.string);
+  page = poppler_document_get_page (doc, pn - 1);
+  perror_if_not (page, "No such page %d", pn);
+  poppler_page_get_size (page, &width, &height);
+  cert = poppler_get_certificate_info_by_id (cert_id);
+  nss_perror_if_password ();
+  perror_if_not (cert, "No such signing certificate: %s", cert_id);
+
+  /* PDF coordinates start at the bottom of the page. */
+  rect.x1 = MIN (r.x1, r.x2) * width;
+  rect.x2 = MAX (r.x1, r.x2) * width;
+  rect.y1 = height - MAX (r.y1, r.y2) * height;
+  rect.y2 = height - MIN (r.y1, r.y2) * height;
+
+  data = poppler_signing_data_new ();
+  poppler_signing_data_set_destination_filename (data, args[5].value.string);
+  poppler_signing_data_set_certificate_info (data, cert);
+  poppler_signing_data_set_page (data, pn - 1);
+  poppler_signing_data_set_signature_rectangle (data, &rect);
+  poppler_signing_data_set_field_partial_name (data, args[4].value.string);
+  if (*reason)
+    poppler_signing_data_set_reason (data, reason);
+  if (*location)
+    poppler_signing_data_set_location (data, location);
+  /* Older poppler versions need both texts, even if empty. */
+  poppler_signing_data_set_signature_text (data, text);
+  poppler_signing_data_set_signature_text_left (data, text_left);
+  poppler_signing_data_set_password (data, args[10].value.string);
+
+  /* Signing runs in a thread; wait for it. */
+  poppler_document_sign (doc, data, NULL, sign_ready, &res);
+  while (! res.done)
+    g_main_context_iteration (NULL, TRUE);
+  nss_perror_if_password ();
+  perror_if_not (res.ok, "Unable to sign the document: %s",
+                 res.error ? res.error->message
+                 : "wrong password or unusable certificate?");
+
+  OK_BEGIN ();
+  OK_END ();
+
+ error:
+  nss_end ();
+  if (res.error) g_error_free (res.error);
+  if (data) poppler_signing_data_free (data);
+  if (cert) poppler_certificate_info_free (cert);
+  if (page) g_object_unref (page);
+}
+
+#endif  /* HAVE_POPPLER_SIGNING */
 
 
 const command_arg_type_t cmd_synctex_forward_search_spec[] =
@@ -4349,6 +4641,11 @@ static const command_t commands [] =
 #endif
 #ifdef HAVE_POPPLER_SIGNATURES
     DEC_CMD (validatesignature),
+#endif
+#ifdef HAVE_POPPLER_SIGNING
+    DEC_CMD (setnssdir),
+    DEC_CMD (signingcertificates),
+    DEC_CMD (sign),
 #endif
 
     /* Synctex */
