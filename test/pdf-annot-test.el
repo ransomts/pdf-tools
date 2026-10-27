@@ -407,11 +407,6 @@ the tests are about the list."
   "Per the docstring of `pdf-annot-modified-functions', calling the
 closure with an argument other than :inserted, :deleted, :changed,
 t or nil signals an error."
-  ;; BUG: the closure built in `pdf-annot-run-modified-hooks' uses a
-  ;; catch-all `t' clause in its `cl-case', so any other argument
-  ;; (e.g. a misspelt :insert) silently returns the union of all
-  ;; modified annotations instead of signalling.
-  :expected-result :failed
   (pdf-annot-test-with-pdf "test.pdf"
     (let (closure)
       (add-hook 'pdf-annot-modified-functions

@@ -532,7 +532,9 @@ the variable is nil and this function is called again."
                           (:inserted (copy-sequence inserted))
                           (:changed (copy-sequence changed))
                           (:deleted (copy-sequence deleted))
-                          (t (copy-sequence union))))))
+                          ((t) (copy-sequence union))
+                          (otherwise
+                           (error "Invalid argument: %s" arg))))))
            (pages (mapcar (lambda (a) (pdf-annot-get a 'page)) union)))
       (when union
         (unwind-protect
