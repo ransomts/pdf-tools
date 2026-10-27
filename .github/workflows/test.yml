@@ -2,9 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    # tim: this fork's integration branch (fork-only change).
+    branches: [master, tim]
   pull_request:
-    branches: [master]
+    # tim: pull requests into this fork's integration branch
+    # (fork-only change).
+    branches: [master, tim]
 
 jobs:
   # Fail on any byte-compiler warning.  Pinned to one release: the
