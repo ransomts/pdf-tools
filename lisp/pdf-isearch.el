@@ -610,6 +610,11 @@ is no such page."
 Implements default isearch behaviour, i.e. it stops at every
 match."
   (cond
+   ((and (null last-match) (not (eq last-page this-page)))
+    ;; The search just moved to this page, which is displayed from its
+    ;; top: start from its top-left or bottom-right, not from the edge
+    ;; of the window.
+    (car matches))
    ((null last-match)
     ;; Goto first match from top or bottom of the window.
     (let* ((iedges (pdf-util-image-displayed-edges))
