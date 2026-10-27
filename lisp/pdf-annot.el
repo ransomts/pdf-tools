@@ -1068,7 +1068,7 @@ Return the new annotation."
   (when (and (eq type 'text)
              (> (length edges) 1))
     (error "Edges argument should be a single edge-list for text annotations"))
-  (let* ((selection-style pdf-view-selection-style)
+  (let* ((selection-style (pdf-view-region-selection-style))
          (non-markup (pcase type
                        ('text t)
                        ('highlight pdf-view--have-rectangle-region)))
