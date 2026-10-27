@@ -571,7 +571,7 @@ interrupted."
      (mapcar #'pdf-info-query--transform-form-field response))
     (validatesignature
      (pdf-info-query--transform-signature (car response)))
-    ((delannot setformfield setformfield-text) nil)
+    ((delannot setformfield setformfield-text resetform) nil)
     ((save) (caar response))
     ((renderpage renderpage-text-regions renderpage-highlight)
      (pdf-util-munch-file (caar response)))
@@ -667,15 +667,18 @@ interrupted."
 (defun pdf-info-query--transform-form-field (f)
   "Transform form field F."
   (let* ((type (intern (nth 3 f)))
-         (value (nth 7 f)))
+         (value (nth 9 f)))
     `((page . ,(string-to-number (nth 0 f)))
       (edges . ,(mapcar #'string-to-number
                         (split-string (nth 1 f) " " t)))
       (id . ,(string-to-number (nth 2 f)))
       (type . ,type)
       (name . ,(nth 4 f))
-      (read-only . ,(equal (nth 5 f) "1"))
-      (flags . ,(mapcar #'intern (split-string (nth 6 f) " " t)))
+      (tooltip . ,(and (> (length (nth 5 f)) 0) (nth 5 f)))
+      (read-only . ,(equal (nth 6 f) "1"))
+      (flags . ,(mapcar #'intern (split-string (nth 7 f) " " t)))
+      (max-length . ,(and (> (length (nth 8 f)) 0)
+                          (string-to-number (nth 8 f))))
       (value . ,(cl-case type
                   ((checkbox radio) (equal value "1"))
                   ((combo list) (mapcar #'string-to-number
@@ -683,8 +686,8 @@ interrupted."
                   (push nil)
                   (t value)))
       ,@(when (memq type '(combo list))
-          `((text . ,(nth 8 f))
-            (items . ,(nthcdr 9 f)))))))
+          `((text . ,(nth 10 f))
+            (items . ,(nthcdr 11 f)))))))
 
 (defun pdf-info-query--transform-signature (s)
   "Transform signature validation S."
@@ -1573,8 +1576,9 @@ returned and owned by the caller."
 
 Each field is an alist with the following keys.  PAGE, EDGES, the
 relative bounding-box of the field's widget, ID, a number
-identifying it, TYPE, NAME, its fully qualified name, READ-ONLY,
-FLAGS and VALUE.
+identifying it, TYPE, NAME, its fully qualified name, TOOLTIP, its
+description for users or nil, READ-ONLY, FLAGS, MAX-LENGTH, the
+most characters a text field takes or nil, and VALUE.
 
 TYPE is one of text, multiline, password, file-select, checkbox,
 radio, push, combo, list, signature or unknown.
@@ -1585,9 +1589,10 @@ ITEMS for combo and list fields, which have this additional key.
 It is nil for all other fields.
 
 FLAGS is a list of symbols: `multiple', if more than one item of
-a combo or list field may be selected, and `editable', if a combo
-field accepts other text than its items.  Such a field has an
-additional key TEXT, the text a user typed into it."
+a combo or list field may be selected, `editable', if a combo
+field accepts other text than its items, and `reset', if a push
+button resets the form.  Combo and list fields have an additional
+key TEXT, the text a user typed into an editable one."
   (pdf-info-query
    'getformfields
    (pdf-info--normalize-file-or-buffer file-or-buffer)
@@ -1619,6 +1624,22 @@ TEXT need not be one of the field's items."
    (pdf-info--normalize-file-or-buffer file-or-buffer)
    id
    text))
+
+(defun pdf-info-form-reset-p ()
+  (not (null (memq 'form-reset (pdf-info-features)))))
+
+(defun pdf-info-resetform (&optional id file-or-buffer)
+  "Reset form fields in FILE-OR-BUFFER to their default values.
+
+With ID, a push button whose flags contain `reset' (see
+`pdf-info-formfields'), reset the fields that button resets;
+otherwise all of them."
+  (unless (pdf-info-form-reset-p)
+    (error "Resetting forms is not supported by this version of epdfinfo"))
+  (pdf-info-query
+   'resetform
+   (pdf-info--normalize-file-or-buffer file-or-buffer)
+   (or id 0)))
 
 (defun pdf-info-signatures-p ()
   (not (null (memq 'signatures (pdf-info-features)))))

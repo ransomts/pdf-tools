@@ -11,13 +11,13 @@
 (ert-deftest pdf-form-formfields ()
   (pdf-test-with-pdf "forms.pdf"
     (let ((fields (pdf-info-formfields 1)))
-      (should (= 11 (length fields)))
+      (should (= 13 (length fields)))
       (should (cl-every (lambda (f)
                           (pdf-test-relative-edges-p (alist-get 'edges f)))
                         fields))
       (should (equal (mapcar (lambda (f) (alist-get 'type f)) fields)
                      '(text multiline password text checkbox
-                       combo radio list combo list radio)))
+                       combo radio list combo list text push radio)))
       (let-alist (pdf-form-test-field "fixed" fields)
         (should .read-only)
         (should (equal .value "locked")))
@@ -144,7 +144,7 @@
         (setq pdf-form--current-field nil)
         (pdf-form-next-field 4))
       (should (equal (nreverse visited)
-                     '("name" "notes" "name" "size" "tags" "size" "agree"))))))
+                     '("name" "notes" "name" "size" "zip" "size" "agree"))))))
 
 (ert-deftest pdf-form-validatesignature ()
   (skip-unless (pdf-info-signatures-p))
@@ -161,3 +161,86 @@
         (should (string-match-p "\\`[0-9]\\{4\\}-" .signing-time)))
       (should-error (pdf-info-validatesignature
                      (alist-get 'id (pdf-form-test-field "name")))))))
+
+(ert-deftest pdf-form-tooltip-and-max-length ()
+  (pdf-test-with-pdf "forms.pdf"
+    (let ((fields (pdf-info-formfields 1)))
+      (let-alist (pdf-form-test-field "name" fields)
+        (should (equal .tooltip "Your full name"))
+        (should-not .max-length))
+      (should (equal (pdf-form-label (pdf-form-test-field "name" fields))
+                     "Your full name"))
+      (should (equal (pdf-form-label (pdf-form-test-field "notes" fields))
+                     "notes"))
+      (should (string-prefix-p "Your full name: "
+                               (pdf-form-field-to-string
+                                (pdf-form-test-field "name" fields))))
+      (let ((zip (pdf-form-test-field "zip" fields)))
+        (should (= (alist-get 'max-length zip) 5))
+        (should (equal (pdf-form--check-length zip "29634") "29634"))
+        (should-error (pdf-form--check-length zip "296340") :type 'user-error)))))
+
+(ert-deftest pdf-form-reset ()
+  (skip-unless (pdf-info-form-reset-p))
+  (pdf-test-with-pdf "forms.pdf"
+    (let ((reset (pdf-form-test-field "Reset")))
+      (should (pdf-form-reset-button-p reset))
+      (should (pdf-form-actionable-p reset))
+      (should-not (pdf-form-fillable-p reset))
+      ;; The button.
+      (pdf-info-setformfield (alist-get 'id (pdf-form-test-field "name")) "Ada")
+      (pdf-info-setformfield (alist-get 'id (pdf-form-test-field "agree")) t)
+      (pdf-info-resetform (alist-get 'id reset))
+      (should (equal (alist-get 'value (pdf-form-test-field "name")) ""))
+      (should-not (alist-get 'value (pdf-form-test-field "agree")))
+      ;; The whole form, as a command.
+      (pdf-info-setformfield (alist-get 'id (pdf-form-test-field "name")) "Bob")
+      (set-buffer-modified-p nil)
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+        (pdf-form-reset))
+      (should (buffer-modified-p))
+      (should (equal (alist-get 'value (pdf-form-test-field "name")) ""))
+      ;; Only reset buttons reset.
+      (should-error (pdf-info-resetform
+                     (alist-get 'id (pdf-form-test-field "name")))))))
+
+(ert-deftest pdf-form-values ()
+  (pdf-test-with-pdf "forms.pdf"
+    (should (equal (pdf-form-values)
+                   '(("name" . "") ("notes" . "") ("secret" . "")
+                     ("fixed" . "locked") ("agree" . nil) ("color" . "Green")
+                     ("size" . nil) ("fruit" . nil) ("pet" . nil)
+                     ("tags" . nil) ("zip" . ""))))))
+
+(ert-deftest pdf-form-fill ()
+  (pdf-test-with-pdf "forms.pdf"
+    (pdf-form-fill '(("name" . "Ada") ("agree" . t) ("size" . 2)
+                     ("color" . "Blue") ("pet" . "Ferret")
+                     ("tags" . ("Red" "Blue")) ("zip" . "29634")))
+    (should (buffer-modified-p))
+    (let ((values (pdf-form-values)))
+      (should (equal (cdr (assoc "name" values)) "Ada"))
+      (should (eq (cdr (assoc "agree" values)) t))
+      (should (= (cdr (assoc "size" values)) 2))
+      (should (equal (cdr (assoc "color" values)) "Blue"))
+      (should (equal (cdr (assoc "pet" values)) "Ferret"))
+      (should (equal (cdr (assoc "tags" values)) '("Red" "Blue")))
+      (should (equal (cdr (assoc "zip" values)) "29634")))
+    ;; The values of one call round-trip.
+    (let ((values (pdf-form-values)))
+      (pdf-form-fill values)
+      (should (equal (pdf-form-values) values)))
+    ;; Selecting the other radio button deselects the first.
+    (pdf-form-fill '(("size" . 1)))
+    (should (= (cdr (assoc "size" (pdf-form-values))) 1))
+    ;; Errors change nothing, even for the valid values before them.
+    (let ((before (pdf-form-values)))
+      (dolist (bad '((("name" . "Bob") ("nope" . "x"))
+                     (("name" . "Bob") ("fixed" . "x"))
+                     (("name" . "Bob") ("zip" . "296340"))
+                     (("name" . "Bob") ("size" . 3))
+                     (("name" . "Bob") ("color" . "Mauve"))
+                     (("name" . "Bob") ("color" . ("Red" "Blue")))
+                     (("name" . "Bob") ("name" . 42))))
+        (should-error (pdf-form-fill bad))
+        (should (equal (pdf-form-values) before))))))

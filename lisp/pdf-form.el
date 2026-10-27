@@ -25,6 +25,9 @@
 ;;
 ;; Clicking on a signature field, or M-x pdf-form-signatures, shows
 ;; whether its signature is valid.
+;;
+;; From Lisp, `pdf-form-values' returns the values of a form and
+;; `pdf-form-fill' fills one in, both by field name.
 
 (require 'pdf-view)
 (require 'pdf-info)
@@ -105,11 +108,22 @@ signature is valid.
   "Return non-nil, if FIELD is a signature field."
   (eq (alist-get 'type field) 'signature))
 
+(defun pdf-form-reset-button-p (field)
+  "Return non-nil, if FIELD is a push button that resets the form."
+  (and (eq (alist-get 'type field) 'push)
+       (memq 'reset (alist-get 'flags field))))
+
 (defun pdf-form-actionable-p (field)
-  "Return non-nil, if FIELD may be filled in or its signature validated."
+  "Return non-nil, if FIELD may be filled in, pressed or validated."
   (or (pdf-form-fillable-p field)
+      (and (pdf-form-reset-button-p field)
+           (not (alist-get 'read-only field)))
       (and (pdf-form-signature-p field)
            (pdf-info-signatures-p))))
+
+(defun pdf-form-label (field)
+  "Return the name to show for FIELD: its tooltip, else its name."
+  (or (alist-get 'tooltip field) (alist-get 'name field)))
 
 (defun pdf-form-hotspots-function (page size)
   "Create hotspots for the form fields on PAGE using SIZE."
@@ -169,7 +183,7 @@ signature is valid.
 (defun pdf-form-field-to-string (field)
   "Return a string describing FIELD and its value."
   (let-alist field
-    (format "%s: %s" .name
+    (format "%s: %s" (pdf-form-label field)
             (cl-case .type
               (checkbox (if .value "on" "off"))
               ;; The buttons of a group share its name, number them.
@@ -191,6 +205,7 @@ signature is valid.
                    .text
                  (mapconcat (lambda (i) (nth i .items)) .value ", ")))
               (password (make-string (length .value) ?*))
+              (push "button")
               (signature "signature")
               (t .value)))))
 
@@ -205,14 +220,20 @@ signature is valid.
 (defun pdf-form-read-value (field)
   "Read a new value for FIELD from the user."
   (let-alist field
-    (let ((prompt (format "%s: " .name)))
+    (let ((prompt (concat (pdf-form-label field)
+                          (and .max-length
+                               (format " (at most %d characters)" .max-length))
+                          ": ")))
       (cl-case .type
-        (text (read-string prompt .value))
+        (text (pdf-form--check-length
+               field (read-string prompt .value)))
         (multiline
-         (read-from-minibuffer
-          (format "%s (C-c C-c to finish): " .name)
-          .value pdf-form-multiline-map))
-        (password (read-passwd prompt))
+         (pdf-form--check-length
+          field
+          (read-from-minibuffer
+           (format "%s (C-c C-c to finish): " (string-remove-suffix ": " prompt))
+           .value pdf-form-multiline-map)))
+        (password (pdf-form--check-length field (read-passwd prompt)))
         (file-select (read-file-name prompt nil .value))
         (checkbox (not .value))
         (radio t)
@@ -231,6 +252,14 @@ signature is valid.
                   (index (cl-position item .items :test #'equal)))
              ;; An editable field takes text that is not one of its items.
              (if index (list index) item)))))))))
+
+(defun pdf-form--check-length (field text)
+  "Return TEXT, or signal an error if it is too long for FIELD."
+  (let ((max (alist-get 'max-length field)))
+    (when (and max (> (length text) max))
+      (user-error "`%s' takes at most %d characters"
+                  (pdf-form-label field) max))
+    text))
 
 (defun pdf-form-show-field (field &optional window)
   "Turn to FIELD's page in WINDOW and highlight it."
@@ -261,8 +290,13 @@ Show the validity of a signature field's signature instead."
   (cond
    ((pdf-form-signature-p field)
     (pdf-form-describe-signatures (list field)))
+   ((pdf-form-reset-button-p field)
+    (when (y-or-n-p (format "Press `%s' and reset the form? "
+                            (pdf-form-label field)))
+      (pdf-info-resetform (alist-get 'id field))
+      (pdf-form--changed)))
    ((not (pdf-form-fillable-p field))
-    (user-error "Field `%s' can't be filled in" (alist-get 'name field)))
+    (user-error "Field `%s' can't be filled in" (pdf-form-label field)))
    (t
     (setq pdf-form--current-field
           (cons (alist-get 'page field) (alist-get 'id field)))
@@ -283,16 +317,37 @@ Show the validity of a signature field's signature instead."
 
 VALUE has the form described in `pdf-info-formfields'.  A string
 sets the text of an editable combo field."
-  (let ((page (alist-get 'page field))
-        (id (alist-get 'id field)))
+  (pdf-form--set field value)
+  (pdf-form--changed (list (alist-get 'page field))))
+
+(defun pdf-form--set (field value)
+  "Set FIELD to VALUE in the server, see `pdf-form-set-field'."
+  (let ((id (alist-get 'id field)))
     (if (and (stringp value)
              (memq (alist-get 'type field) '(combo list)))
         (pdf-info-setformfield-text id value)
-      (pdf-info-setformfield id value))
-    (set-buffer-modified-p t)
-    (pdf-cache-clear-data-of-pages page)
-    (pdf-cache-clear-images-of-pages page)
-    (pdf-view-redisplay-pages page)))
+      (pdf-info-setformfield id value))))
+
+(defun pdf-form--changed (&optional pages)
+  "Mark the buffer modified and redisplay PAGES, or all pages."
+  (set-buffer-modified-p t)
+  (cond
+   (pages
+    (apply #'pdf-cache-clear-data-of-pages pages)
+    (apply #'pdf-cache-clear-images-of-pages pages)
+    (apply #'pdf-view-redisplay-pages pages))
+   (t
+    (pdf-cache-clear-data)
+    (pdf-cache-clear-images)
+    (pdf-view-redisplay t))))
+
+(defun pdf-form-reset ()
+  "Reset all fields of the form to their default values."
+  (interactive)
+  (pdf-util-assert-pdf-buffer)
+  (when (y-or-n-p "Reset all fields of the form? ")
+    (pdf-info-resetform)
+    (pdf-form--changed)))
 
 (defun pdf-form-fill-field (field)
   "Fill in FIELD, one of the fields on the displayed pages.
@@ -348,6 +403,146 @@ See `pdf-form-next-field'."
   (interactive "p")
   (pdf-form-next-field (- (or n 1))))
 
+
+;; * ================================================================== *
+;; * Values from and for Lisp
+;; * ================================================================== *
+
+(defun pdf-form--named-fields ()
+  "Return the fillable fields of the document, grouped by name.
+
+The result is an alist (NAME . WIDGETS) in document order.  The
+buttons of a radio group, and widgets showing the same field, share
+a name."
+  (let (groups)
+    (dolist (f (pdf-form-fields
+                (number-sequence 1 (pdf-cache-number-of-pages))
+                (lambda (f)
+                  (memq (alist-get 'type f)
+                        '(text multiline password file-select
+                          checkbox radio combo list)))))
+      (let ((group (assoc (alist-get 'name f) groups)))
+        (if group
+            (setcdr group (append (cdr group) (list f)))
+          (push (list (alist-get 'name f) f) groups))))
+    (nreverse groups)))
+
+(defun pdf-form--radio-buttons (widgets)
+  "Return the radio buttons among WIDGETS, sorted by id."
+  (sort (cl-remove-if-not (lambda (f) (eq (alist-get 'type f) 'radio))
+                          (copy-sequence widgets))
+        (lambda (a b) (< (alist-get 'id a) (alist-get 'id b)))))
+
+(defun pdf-form--lisp-value (widgets)
+  "Return the value of the field shown by WIDGETS, for Lisp."
+  (let-alist (car widgets)
+    (cl-case .type
+      (radio
+       (let ((n (cl-position-if (lambda (f) (alist-get 'value f))
+                                (pdf-form--radio-buttons widgets))))
+         (and n (1+ n))))
+      ((combo list)
+       (let ((items (mapcar (lambda (i) (nth i .items)) .value)))
+         (cond
+          ((memq 'multiple .flags) items)
+          (items (car items))
+          ((> (length .text) 0) .text))))
+      (t .value))))
+
+(defun pdf-form-values ()
+  "Return the values of the form in the current buffer.
+
+The result is an alist (NAME . VALUE) in document order, where NAME
+is a field's fully qualified name and VALUE is
+
+- a string for a text field,
+- t or nil for a checkbox,
+- for a radio group, the number of the selected button, counting
+  from 1 in the order of `pdf-info-formfields', or nil,
+- for a combo box or list, the selected item, or the text typed into
+  an editable combo box, or nil; a list of the selected items if
+  more than one may be selected.
+
+Push buttons and signatures are left out.  `pdf-form-fill' takes
+the same values."
+  (pdf-util-assert-pdf-buffer)
+  (mapcar (lambda (group)
+            (cons (car group) (pdf-form--lisp-value (cdr group))))
+          (pdf-form--named-fields)))
+
+(defun pdf-form--server-value (widgets value)
+  "Return the widget and value to set to give WIDGETS VALUE.
+
+The result is a cons (WIDGET . SERVER-VALUE), see
+`pdf-form-set-field', or nil if there is nothing to set.  Signal an
+error if VALUE does not fit."
+  (let* ((f (car widgets))
+         (name (alist-get 'name f)))
+    (if (alist-get 'read-only f)
+        ;; Accept its own value, so that `pdf-form-values' round-trips.
+        (unless (equal value (pdf-form--lisp-value widgets))
+          (error "Form field `%s' is read-only" name))
+      (pdf-form--server-value-1 widgets value))))
+
+(defun pdf-form--server-value-1 (widgets value)
+  "Like `pdf-form--server-value' for a field that is not read-only."
+  (let* ((f (car widgets))
+         (name (alist-get 'name f)))
+    (let-alist f
+      (cl-case .type
+        ((text multiline password file-select)
+         (unless (stringp value)
+           (error "Form field `%s' takes a string: %S" name value))
+         (when (and .max-length (> (length value) .max-length))
+           (error "Form field `%s' takes at most %d characters" name .max-length))
+         (cons f value))
+        (checkbox (cons f (and value t)))
+        (radio
+         (let ((buttons (pdf-form--radio-buttons widgets)))
+           (cond
+            ((null value)
+             (cons (or (cl-find-if (lambda (b) (alist-get 'value b)) buttons)
+                       (car buttons))
+                   nil))
+            ((and (natnump value) (<= 1 value (length buttons)))
+             (cons (nth (1- value) buttons) t))
+            (t (error "Form field `%s' takes a button number from 1 to %d: %S"
+                      name (length buttons) value)))))
+        ((combo list)
+         (let ((values (if (listp value) value (list value))))
+           (when (and (cdr values) (not (memq 'multiple .flags)))
+             (error "Form field `%s' takes one item: %S" name value))
+           (cond
+            ((cl-every (lambda (v) (member v .items)) values)
+             (cons f (mapcar (lambda (v) (cl-position v .items :test #'equal))
+                             values)))
+            ((and (stringp value) (memq 'editable .flags))
+             (cons f value))
+            (t (error "Form field `%s' has no item %S; it has %S"
+                      name value .items)))))))))
+
+(defun pdf-form-fill (values)
+  "Fill in the form in the current buffer with VALUES.
+
+VALUES is an alist (NAME . VALUE) as returned by `pdf-form-values';
+fields it does not name keep their values.  All VALUES are checked
+before any field is changed, so an error leaves the form as it was."
+  (pdf-util-assert-pdf-buffer)
+  (let* ((groups (pdf-form--named-fields))
+         (settings
+          (mapcar (lambda (nv)
+                    (let ((group (assoc (car nv) groups)))
+                      (unless group
+                        (error "No fillable form field named `%s'" (car nv)))
+                      (pdf-form--server-value (cdr group) (cdr nv))))
+                  values)))
+    (setq settings (delq nil settings))
+    (dolist (setting settings)
+      (pdf-form--set (car setting) (cdr setting)))
+    (when settings
+      (pdf-form--changed
+       (delete-dups (mapcar (lambda (setting) (alist-get 'page (car setting)))
+                            settings))))))
 
 ;; * ================================================================== *
 ;; * Signatures
