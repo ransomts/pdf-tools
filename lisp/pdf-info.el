@@ -137,6 +137,22 @@ The hook is run in the documents buffer, if it exists. Otherwise
 in a `with-temp-buffer' form."
   :type 'hook)
 
+(defcustom pdf-info-nss-directory nil
+  "The NSS database with the certificates for digital signatures.
+
+Signing documents takes its certificates and private keys from
+this database, and validating signatures its trusted
+certificates.  If nil, use poppler's default, usually the
+database of the default Firefox profile, if there is one, or
+~/.pki/nssdb.
+
+The epdfinfo server opens the database once, so a change takes
+effect only after the server restarted, see `pdf-info-quit'.
+Requires poppler-glib >= 23.07; older versions always use the
+default."
+  :type '(choice (const :tag "Poppler's default" nil)
+                 directory))
+
 
 
 ;; * ================================================================== *
@@ -571,7 +587,9 @@ interrupted."
      (mapcar #'pdf-info-query--transform-form-field response))
     (validatesignature
      (pdf-info-query--transform-signature (car response)))
-    ((delannot setformfield setformfield-text resetform) nil)
+    (signingcertificates
+     (mapcar #'pdf-info-query--transform-certificate response))
+    ((delannot setformfield setformfield-text resetform setnssdir sign) nil)
     ((save) (caar response))
     ((renderpage renderpage-text-regions renderpage-highlight)
      (pdf-util-munch-file (caar response)))
@@ -702,6 +720,17 @@ interrupted."
       (issuer . ,(not-empty (nth 6 s)))
       (issuer-organization . ,(not-empty (nth 7 s)))
       (expires . ,(not-empty (nth 8 s))))))
+
+(defun pdf-info-query--transform-certificate (c)
+  "Transform signing certificate C."
+  (cl-labels ((not-empty (s)
+                (if (not (equal s "")) s)))
+    `((id . ,(nth 0 c))
+      (subject . ,(not-empty (nth 1 c)))
+      (subject-organization . ,(not-empty (nth 2 c)))
+      (subject-email . ,(not-empty (nth 3 c)))
+      (issuer . ,(not-empty (nth 4 c)))
+      (expires . ,(not-empty (nth 5 c))))))
 
 (defun pdf-info-query--transform-attachment (a)
   (cl-labels ((not-empty (s)
@@ -1658,10 +1687,83 @@ Values that are not available are nil.
 The certificate's revocation is not checked online."
   (unless (pdf-info-signatures-p)
     (error "Validating signatures is not supported by this version of epdfinfo"))
+  (pdf-info--open-nss-directory)
   (pdf-info-query
    'validatesignature
    (pdf-info--normalize-file-or-buffer file-or-buffer)
    id))
+
+(defun pdf-info-signing-p ()
+  (not (null (memq 'signing (pdf-info-features)))))
+
+(defvar pdf-info--nss-process nil
+  "The server process that was told `pdf-info-nss-directory'.")
+
+(defun pdf-info--open-nss-directory ()
+  "Tell the server to use `pdf-info-nss-directory', if it can.
+
+This has to happen before the server uses NSS, which opens its
+database only once."
+  (when (and (pdf-info-signing-p)
+             (not (eq pdf-info--nss-process (pdf-info-process))))
+    (let (pdf-info-asynchronous)
+      (pdf-info-query
+       'setnssdir
+       (if pdf-info-nss-directory
+           (expand-file-name pdf-info-nss-directory)
+         "")))
+    (setq pdf-info--nss-process (pdf-info-process))))
+
+(defun pdf-info-signingcertificates (&optional password)
+  "Return the certificates available for signing documents.
+
+They come from the NSS database `pdf-info-nss-directory'.  If it
+has a password, PASSWORD must be that password.
+
+Return a list of alists with the keys ID, the certificate's
+nickname, which `pdf-info-sign' takes, SUBJECT and ISSUER, the
+common names of its subject and issuer, SUBJECT-ORGANIZATION,
+SUBJECT-EMAIL and EXPIRES, an ISO 8601 time.  Values that are not
+available are nil.
+
+Signal an error with the message \"NSS password required\", if
+the database needs a password and PASSWORD is nil, or \"Wrong
+NSS password\", if it is the wrong one."
+  (unless (pdf-info-signing-p)
+    (error "Signing documents is not supported by this version of epdfinfo"))
+  (pdf-info--open-nss-directory)
+  (pdf-info-query 'signingcertificates (or password "")))
+
+(defun pdf-info-sign (page edges certificate field-name destination
+                           &optional reason location text text-left
+                           password file-or-buffer)
+  "Write a signed copy of FILE-OR-BUFFER to DESTINATION.
+
+The copy gets a new signature field named FIELD-NAME in the
+relative EDGES of PAGE, signed with the certificate whose id is
+CERTIFICATE, see `pdf-info-signingcertificates'.  REASON and
+LOCATION go into the signature, TEXT is shown in the field and
+TEXT-LEFT on its left half; all of them are optional.  PASSWORD
+is the NSS database's password, if it has one.
+
+FILE-OR-BUFFER itself does not change.  DESTINATION is
+overwritten, if it exists."
+  (unless (pdf-info-signing-p)
+    (error "Signing documents is not supported by this version of epdfinfo"))
+  (pdf-info--open-nss-directory)
+  (pdf-info-query
+   'sign
+   (pdf-info--normalize-file-or-buffer file-or-buffer)
+   page
+   (mapconcat #'number-to-string edges " ")
+   certificate
+   field-name
+   (expand-file-name destination)
+   (or reason "")
+   (or location "")
+   (or text "")
+   (or text-left "")
+   (or password "")))
 
 (defun pdf-info-getattachment-from-annot (id &optional do-save file-or-buffer)
   "Return the attachment associated with annotation ID.
