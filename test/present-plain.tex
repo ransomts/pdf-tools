@@ -1,0 +1,13 @@
+% pdf-present test deck: slides only, no notes (a student build).  Used
+% by test/pdf-present-test.el.
+%
+% The three present-*.tex decks share present-slides.tex and differ only
+% in the \setbeameroption line.  Rebuild one from test/ with
+%   pdflatex present-plain.tex && pdflatex present-plain.tex
+% and delete the .aux/.log/.nav/.out/.snm/.toc files afterwards.
+\documentclass[aspectratio=169]{beamer}
+\setbeamertemplate{navigation symbols}{}
+\setbeameroption{hide notes}
+\begin{document}
+\input{present-slides}
+\end{document}
