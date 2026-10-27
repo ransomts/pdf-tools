@@ -7,6 +7,30 @@ on:
     branches: [master]
 
 jobs:
+  # Fail on any byte-compiler warning.  Pinned to one release: the
+  # snapshot obsoletes things without notice.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Emacs
+        uses: purcell/setup-emacs@master
+        with:
+          version: '31.1'
+
+      - name: Install Cask
+        uses: conao3/setup-cask@master
+        with:
+          version: 'snapshot'
+
+      - name: Install Elisp dependencies
+        run: cask install
+
+      - name: Byte-compile without warnings
+        run: make lint
+
   test-ubuntu:
     runs-on: ubuntu-latest
     strategy:
@@ -47,6 +71,47 @@ jobs:
 
       - name: Run tests
         run: make test
+
+  # Run the tests against an epdfinfo built with AddressSanitizer and
+  # UndefinedBehaviorSanitizer, so memory errors and leaks fail CI.
+  test-asan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Emacs
+        uses: purcell/setup-emacs@master
+        with:
+          version: '29.4'
+
+      - name: Install Cask
+        uses: conao3/setup-cask@master
+        with:
+          version: 'snapshot'
+
+      - name: Install server build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make automake autoconf gcc g++ \
+            libpng-dev libpoppler-glib-dev libpoppler-private-dev \
+            libz-dev pkg-config
+
+      - name: Compile epdfinfo server
+        run: make autobuild
+
+      - name: Install Elisp dependencies
+        run: cask install
+
+      - name: Run tests under the sanitizers
+        run: make test-asan
+
+      - name: Upload sanitizer reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: asan-logs
+          path: asan-logs/
 
   test-macos:
     runs-on: macos-latest

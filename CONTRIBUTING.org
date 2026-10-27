@@ -1,0 +1,171 @@
+#+TITLE: Contributing to PDF Tools
+
+Thanks for helping.  This file says how the code fits together, how to
+build and test it, and what a pull request needs.  For using PDF Tools,
+see [[file:README.org][README.org]].
+
+* How the code fits together
+PDF Tools has two halves that talk over a pipe.
+
+- =server/epdfinfo.c= :: A C program on top of poppler-glib.  It opens
+  documents, renders pages to PNG and answers questions about them
+  (text, links, annotations, search, ...).  Emacs starts one
+  =epdfinfo= process and keeps it running.
+- =lisp/= :: The Emacs side.  =pdf-info.el= is the only file that talks
+  to the server; everything else asks it.
+  - =pdf-view.el=: the major mode that displays pages.
+  - =pdf-cache.el=: caches server answers and rendered images.
+  - One file per feature, each usually a minor mode listed in
+    =pdf-tools-modes= in =pdf-tools.el=: =pdf-annot.el=,
+    =pdf-links.el=, =pdf-isearch.el=, =pdf-occur.el=, =pdf-outline.el=,
+    =pdf-history.el=, =pdf-sync.el=, =pdf-misc.el=, =pdf-roll.el=
+    (continuous scrolling), =pdf-virtual.el=.
+
+** The protocol
+One request per line: the command name and its arguments separated by
+=:=, with =\=, =:= and newlines in arguments escaped as =\\=, =\:= and
+=\n= (=pdf-info-query--escape=).  The first argument is usually the
+document's file name.
+
+#+begin_example
+getannots:/tmp/doc.pdf:1:0
+#+end_example
+
+The answer is =OK=, one line per record with fields separated by =:=
+(escaped the same way), then a line with a single =.=:
+
+#+begin_example
+OK
+1:0.1 0.2 0.3 0.4:text:annot-1-0:0:#ff0000:...
+.
+#+end_example
+
+or =ERR=, a message and =.=.  In the server, =OK_BEGIN ()= and
+=OK_END ()= frame an answer, =print_response_string= escapes a field,
+and =perror_if_not= / =printf_error_response= produce an error.  In
+Lisp, =pdf-info-query--transform-response= turns each command's
+records into Lisp data.
+
+To try a command by hand, pipe requests into the server:
+
+#+begin_src sh
+printf 'open:%s:\nnumber-of-pages:%s\n' $PWD/test/test.pdf $PWD/test/test.pdf \
+  | server/epdfinfo
+#+end_src
+
+** Adding a server command
+1. In =server/epdfinfo.c=, write =cmd_NAME= and its argument spec
+   =cmd_NAME_spec= next to related commands, with a comment giving its
+   arguments, its answer and its errors (see =cmd_pagelinks=).  Release
+   every poppler and GLib object on every path, including errors.
+2. Add it to the =commands= table with =DEC_CMD= (or =DEC_CMD2= for a
+   name with a dash).
+3. If it needs a newer poppler-glib than the minimum in
+   =server/configure.ac=, add a =PKG_CHECK_EXISTS= / =AC_DEFINE= pair
+   like the =HAVE_POPPLER_*= ones, wrap the command in =#ifdef=, and
+   report it from =cmd_features= (as =NAME= or =no-NAME=) so Lisp can
+   tell.
+4. In =lisp/pdf-info.el=, add a case to
+   =pdf-info-query--transform-response= and a documented wrapper
+   =pdf-info-NAME= taking an optional =FILE-OR-BUFFER=.  If the answer
+   is per page and does not change, a =define-pdf-cache-function= in
+   =pdf-cache.el= saves round trips.
+5. Test both: the wrapper through the real server in =test/=.
+
+* Building
+You need autotools, a C compiler, pkg-config and the development files
+of poppler-glib, libpng and zlib.  =server/autobuild= installs them on
+many systems and builds the server:
+
+#+begin_src sh
+make autobuild
+#+end_src
+
+or, once the dependencies are there:
+
+#+begin_src sh
+cd server && ./autogen.sh && ./configure && make
+#+end_src
+
+=configure= ends with a list of the optional features it enabled for
+your poppler version.
+
+The Lisp side's own dependencies, and the test tools, are installed
+with [[https://github.com/cask/cask][Cask]]:
+
+#+begin_src sh
+cask install
+#+end_src
+
+* Checks
+Run these before opening a pull request.  CI runs all of them.
+
+- =make test= :: The ERT tests in =test/=, against the real server.  It
+  builds the package tarball first, which the tests install.  To run
+  some of them, build it once with =make= and then
+  =PACKAGE_TAR=pdf-tools-VERSION.tar cask exec ert-runner -p REGEXP=.
+- =make lint= :: Byte-compiles =lisp/*.el= and fails on any warning.
+  CI runs it on one Emacs release (see =.github/workflows/test.yml=).
+  Fix warnings rather than silence them; =declare-function= and an
+  empty =defvar= are the usual fixes for functions and variables from
+  files that are not loaded yet.
+- =make test-asan= :: Rebuilds =epdfinfo= with AddressSanitizer and
+  UndefinedBehaviorSanitizer and runs the tests against it.  Any
+  memory error, leak or undefined behaviour fails it, and the reports
+  are left in =asan-logs/=.  Run it whenever you change C code.  Run
+  =cd server && ./configure && make clean && make= afterwards to get a
+  normal build back.
+- =make server-test= :: Builds the server in containers for several
+  systems (needs Podman; see the README).
+
+CI also runs =make test= on several Emacs versions, on macOS, and
+builds the server on Windows.
+
+* Writing code
+- *Emacs versions*: the oldest supported Emacs is the one in
+  =Package-Requires= in =lisp/pdf-tools.el= (26.3).  Don't use
+  functions or macros newer than that without a fallback; CI tests it.
+- *Poppler versions*: guard newer poppler-glib API as described above.
+- *Style*: follow the file you are in.  Lisp files use
+  =lexical-binding=, a docstring for every function, variable and
+  option, and =;; * ===...= banners between sections.  The C code uses
+  GNU style.
+- *Options*: user-visible settings are =defcustom= with a =:type= and
+  a =:group=.
+- *Keys*: before binding a key, check the other modes' maps and the
+  key tables in =README.org=; all of the modes are active in the same
+  buffer.
+
+* Tests
+- Every change that can be tested comes with a test that fails
+  without it.
+- Test files are =test/FILE-test.el=, one per Lisp file.  The macros
+  in =test/test-helper.el= open a fixture with a running server:
+  =pdf-test-with-test-pdf= and =pdf-test-with-pdf=.
+- Fixtures live in =test/= with the source they were built from (for
+  example =test/test.tex= for =test/test.pdf=) and a note on how to
+  rebuild them.  Tests never modify a fixture; copy it to a temporary
+  file first.
+- Tests run in batch, without a window system.  Test the logic below
+  the display, or stub narrowly with =cl-letf=; never stub the thing
+  under test.
+
+* Commits and pull requests
+- One change per pull request: a fix, or a feature with its tests and
+  documentation.  Unrelated cleanups go in their own.
+- Commit messages follow [[https://www.conventionalcommits.org][Conventional Commits]], as in the history:
+  =fix(pdf-view): ...=, =feat(pdf-annot): ...=, =test: ...=, =docs: ...=,
+  =ci: ...=.  Say why in the body, and refer to issues with
+  =Fixes #N=.
+- Add an entry to =NEWS= under =* Unreleased= (new functionality,
+  improvements and fixes, or API changes), and update =README.org= for
+  new commands, options or keys.
+- Make sure =make test=, =make lint= and, for C changes,
+  =make test-asan= pass.
+
+* Reporting bugs
+Use the bug report template.  The most useful reports include the
+steps to reproduce it starting from =emacs -Q=, the output of
+=M-x pdf-tools-toggle-debug= and the =*Messages*= buffer, your Emacs
+and poppler versions, and a PDF that shows the problem if you can share
+one.

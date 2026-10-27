@@ -16,7 +16,7 @@ PKG=pdf-tools
 pkgname=$(PKG)-$(version)
 pkgfile=$(pkgname).tar
 
-.PHONY: all clean distclean bytecompile test check melpa
+.PHONY: all clean distclean bytecompile lint test test-asan check melpa
 
 all: $(pkgfile)
 
@@ -30,6 +30,13 @@ loaddefs: $(PKG)-autoloads.el
 bytecompile: .cask/$(emacs_version)
 	$(CASK) exec $(emacs) --batch -L lisp -f batch-byte-compile lisp/*.el
 
+# Byte-compile the Lisp sources, failing on any warning
+lint: .cask/$(emacs_version)
+	$(CASK) exec $(emacs) --batch -L lisp \
+		--eval '(setq byte-compile-error-on-warn t)' \
+		-f batch-byte-compile lisp/*.el; \
+	status=$$?; rm -f -- lisp/*.elc; exit $$status
+
 # Clean bytecompiled sources
 byteclean:
 	rm -f -- lisp/*.elc
@@ -40,6 +47,20 @@ test: all
 	PACKAGE_TAR=$(pkgfile) $(CASK) exec ert-runner
 
 check: test
+
+# Run the ERT tests against an epdfinfo built with AddressSanitizer
+# and UndefinedBehaviorSanitizer.  Any report fails the target; the
+# reports are left in asan-logs/.
+sanitize_flags = -g -O1 -fno-omit-frame-pointer -fsanitize=address,undefined
+test-asan:
+	cd server && ./configure CFLAGS="$(sanitize_flags)" \
+		LDFLAGS="-fsanitize=address,undefined" && \
+		$(MAKE) clean && $(MAKE)
+	rm -rf asan-logs && mkdir asan-logs
+	ASAN_OPTIONS=log_path=$(CURDIR)/asan-logs/asan \
+	UBSAN_OPTIONS=print_stacktrace=1:log_path=$(CURDIR)/asan-logs/ubsan \
+		$(MAKE) test
+	@if [ -n "$$(ls -A asan-logs)" ]; then cat asan-logs/*; exit 1; fi
 
 # Run the autobuild script tests in docker
 test-autobuild: server-test
