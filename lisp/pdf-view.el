@@ -1163,7 +1163,11 @@ If PAGE is non-nil return its size instead of current page."
                         (image-get-display-property))))
     (if displayed-p
         (image-display-size display-prop t)
-      (image-size display-prop t))))
+      ;; With a slice, the display property is not an image itself.
+      (image-size (if (eq (car-safe display-prop) 'image)
+                      display-prop
+                    (assq 'image display-prop))
+                  t))))
 
 (defun pdf-view-image-offset (&optional window)
   ;; TODO: add WINDOW to docstring.
