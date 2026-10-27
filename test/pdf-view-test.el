@@ -137,3 +137,118 @@ command's own down event."
          (pdf-view-test--event 'C-down-mouse-1 250 195))
         (should (equal pdf-view-active-region
                        (list 1 '(0.48 0.195 0.59 0.195))))))))
+
+(defconst pdf-view-test--line
+  "PDF Tools is, among other things, a replacement of DocView for PDF files. The"
+  "The first line of text on page 1 of test.pdf.
+The word \"replacement\" spans x from 477 to 563 pixel in it, at y 195.")
+
+(ert-deftest pdf-view-mouse-double-click-selects-word ()
+  "A double click selects the word under the mouse, whatever the style."
+  (pdf-test-with-test-pdf
+    (dolist (style '(glyph word line))
+      (let ((pdf-view-selection-style style))
+        (pdf-view-test--with-mouse
+            (list (pdf-view-test--event 'double-mouse-1 520 195 2))
+          (pdf-view-mouse-set-region
+           (pdf-view-test--event 'double-down-mouse-1 520 195 2))
+          (should (equal pdf-view-active-region
+                         (list 1 '(0.52 0.195 0.52 0.195))))
+          (should (eq (pdf-view-region-selection-style) 'word))
+          (should (equal (pdf-view-active-region-text)
+                         '("replacement"))))))))
+
+(ert-deftest pdf-view-mouse-triple-click-selects-line ()
+  "A triple click selects the line under the mouse."
+  (pdf-test-with-test-pdf
+    (let ((pdf-view-selection-style 'glyph))
+      (pdf-view-test--with-mouse
+          (list (pdf-view-test--event 'triple-mouse-1 520 195 3))
+        (pdf-view-mouse-set-region
+         (pdf-view-test--event 'triple-down-mouse-1 520 195 3))
+        (should (eq (pdf-view-region-selection-style) 'line))
+        (should (equal (pdf-view-active-region-text)
+                       (list pdf-view-test--line)))))))
+
+(ert-deftest pdf-view-mouse-double-click-drag-extends-by-words ()
+  "Dragging after a double click selects whole words."
+  (pdf-test-with-test-pdf
+    (let ((pdf-view-selection-style 'glyph))
+      (pdf-view-test--with-mouse
+          (list (pdf-view-test--event 'mouse-movement 300 195)
+                (pdf-view-test--event 'double-mouse-1 300 195 2))
+        (pdf-view-mouse-set-region
+         (pdf-view-test--event 'double-down-mouse-1 520 195 2))
+        (should (equal (pdf-view-active-region-text)
+                       '("is, among other things, a replacement")))))))
+
+(ert-deftest pdf-view-mouse-single-click-ignores-style-of-last-region ()
+  "A drag after a double click selects by `pdf-view-selection-style' again."
+  (pdf-test-with-test-pdf
+    (let ((pdf-view-selection-style 'glyph))
+      (pdf-view-test--with-mouse
+          (list (pdf-view-test--event 'double-mouse-1 520 195 2))
+        (pdf-view-mouse-set-region
+         (pdf-view-test--event 'double-down-mouse-1 520 195 2)))
+      (pdf-view-test--with-mouse
+          (list (pdf-view-test--event 'mouse-movement 540 195)
+                (pdf-view-test--event 'mouse-1 540 195))
+        (pdf-view-mouse-set-region
+         (pdf-view-test--event 'down-mouse-1 500 195)))
+      (should (eq (pdf-view-region-selection-style) 'glyph))
+      (should (equal (pdf-view-active-region-text) '("lacem"))))))
+
+(ert-deftest pdf-view-mouse-shift-click-extends-region ()
+  "A shift click moves the end of the region, keeping its style."
+  (pdf-test-with-test-pdf
+    (let ((pdf-view-selection-style 'glyph))
+      (pdf-view-test--with-mouse
+          (list (pdf-view-test--event 'double-mouse-1 520 195 2))
+        (pdf-view-mouse-set-region
+         (pdf-view-test--event 'double-down-mouse-1 520 195 2)))
+      (pdf-view-test--with-mouse
+          (list (pdf-view-test--event 'S-mouse-1 620 195))
+        (pdf-view-mouse-set-region-end
+         (pdf-view-test--event 'S-down-mouse-1 620 195)))
+      (should (equal pdf-view-active-region
+                     (list 1 '(0.52 0.195 0.62 0.195))))
+      (should (equal (pdf-view-active-region-text)
+                     '("replacement of DocView"))))))
+
+(ert-deftest pdf-view-mouse-shift-click-without-region ()
+  "A shift click without an active region behaves like a click."
+  (pdf-test-with-test-pdf
+    (pdf-view-test--with-mouse
+        (list (pdf-view-test--event 'S-mouse-1 620 195))
+      (pdf-view-mouse-set-region-end
+       (pdf-view-test--event 'S-down-mouse-1 620 195))
+      (should-not (pdf-view-active-region-p)))))
+
+(ert-deftest pdf-view-double-click-region-annotation ()
+  "A markup annotation made from a double click covers just the word."
+  (pdf-test-with-test-pdf
+    (let ((pdf-view-selection-style 'glyph)
+          (pdf-annot-activate-created-annotations nil)
+          ;; The hooks redisplay the page, which needs a window.
+          (pdf-annot-inhibit-modification-hooks t))
+      (pdf-view-test--with-mouse
+          (list (pdf-view-test--event 'double-mouse-1 520 195 2))
+        (pdf-view-mouse-set-region
+         (pdf-view-test--event 'double-down-mouse-1 520 195 2)))
+      (let* ((region (pdf-view-active-region t))
+             (annot (pdf-annot-add-annotation
+                     'highlight (cdr region) nil (car region)))
+             (edges (pdf-annot-get annot 'edges)))
+        (should-not (pdf-view-active-region-p))
+        ;; The word spans 0.477 to 0.563.
+        (should (< 0.47 (nth 0 edges) 0.48))
+        (should (< 0.56 (nth 2 edges) 0.57))))))
+
+(ert-deftest pdf-view-sync-double-click-needs-synctex ()
+  "Double click is only a SyncTeX search when there is a database."
+  (pdf-test-with-test-pdf
+    (should-not (pdf-sync--when-synctex 'pdf-sync-backward-search-mouse))
+    (let ((pdf-sync-locate-synctex-file-functions
+           (list (lambda (_) "/tmp/test.synctex.gz"))))
+      (should (eq (pdf-sync--when-synctex 'pdf-sync-backward-search-mouse)
+                  'pdf-sync-backward-search-mouse)))))

@@ -357,6 +357,12 @@ You can customize the appearance with:
 | Close Annotation List                | ~q~                                                |
 | Enable/Disable Following Annotations | ~C-c C-f~                                          |
 |--------------------------------------+----------------------------------------------------|
+| Select text                          | Drag with ~mouse-1~                                |
+| Select a word / a line               | Double-click / triple-click; drag to extend        |
+| Move the end of the selection        | ~S-mouse-1~ (keeps word or line steps)             |
+| Add another region to the selection  | Drag with ~C-mouse-1~                              |
+| Copy the selected text               | ~M-w~                                              |
+|--------------------------------------+----------------------------------------------------|
 | Add and Edit Annotations             | Select region via Mouse selection.                 |
 |                                      | Then left-click context menu OR keybindings below  |
 |--------------------------------------+----------------------------------------------------|
@@ -382,11 +388,11 @@ You can customize the appearance with:
 :CREATED:  [2021-12-30 Thu 18:37]
 :ID:       ab7872c1-edd6-465d-9d1d-b621db6364a3
 :END:
-| Syncing with AUCTeX                           |             |
-|-----------------------------------------------+-------------|
-| Refresh File (e.g., after recompiling source) | ~g~         |
-| Jump to PDF Location from Source              | ~C-c C-g~   |
-| Jump Source Location from PDF                 | ~C-mouse-1~ |
+| Syncing with AUCTeX                           |                            |
+|-----------------------------------------------+----------------------------|
+| Refresh File (e.g., after recompiling source) | ~g~                        |
+| Jump to PDF Location from Source              | ~C-c C-g~                  |
+| Jump Source Location from PDF                 | ~C-mouse-1~ / double-click |
 
 ** Miscellaneous features
 :PROPERTIES:

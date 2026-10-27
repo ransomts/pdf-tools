@@ -1,8 +1,20 @@
 -*- org -*-
 * Unreleased
+** New functionality to improve overall user experience
+- Select words and lines with the mouse, as in other PDF viewers #30 #132
+  + Double-click selects the word under the mouse, triple-click the line. Dragging after the double or triple click extends the selection by whole words or lines.
+  + ~S-mouse-1~ moves the end of the selection to the click (~pdf-view-mouse-set-region-end~), keeping the word or line steps of a double or triple click.
+  + The selection works with ~M-w~ and the markup annotation commands such as ~C-c C-a h~, and in ~pdf-view-roll-minor-mode~.
+  + With ~pdf-sync-minor-mode~, double-click still jumps to the TeX source when the PDF has a SyncTeX file; ~C-mouse-1~ does so always.
+
 ** Functionality improvements and fixes
 - Fix: A mouse click no longer activates an empty region #342
   + ~pdf-view-active-region-p~ was true after any click in the page, even without a selection. A click now only deselects, and ~C-mouse-1~ again adds to the active region instead of replacing it.
+- Fix: Selecting text in a page with a slice (~s b~, ~s m~) signalled "Invalid image specification"
+
+** API changes (for package developers)
+- New ~pdf-view-region-selection-style~ returns the selection style to read ~pdf-view-active-region~ with
+  + A double or triple click makes a region that selects by ~word~ or ~line~ regardless of ~pdf-view-selection-style~. Code that passes the region's edges to ~pdf-info-gettext~ or ~pdf-info-getselection~ should use this function instead of ~pdf-view-selection-style~; ~pdf-view-active-region-text~ and the annotation commands already do.
 
 * Version 1.3.0
 ** New functionality to improve overall user experience
