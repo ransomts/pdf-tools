@@ -168,6 +168,7 @@ Make sure, not to modify its return value." command)))
 (define-pdf-cache-function boundingbox t)
 (define-pdf-cache-function textregions t)
 (define-pdf-cache-function pagesize t)
+(define-pdf-cache-function formfields t)
 
 
 ;; * ================================================================== *

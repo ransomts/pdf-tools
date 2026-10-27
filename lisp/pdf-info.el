@@ -567,7 +567,11 @@ interrupted."
      `((filename . ,(caar response))
        (line . ,(string-to-number (cadr (car response))))
        (column . ,(string-to-number (cadr (cdar response))))))
-    (delannot nil)
+    (getformfields
+     (mapcar #'pdf-info-query--transform-form-field response))
+    (validatesignature
+     (pdf-info-query--transform-signature (car response)))
+    ((delannot setformfield setformfield-text) nil)
     ((save) (caar response))
     ((renderpage renderpage-text-regions renderpage-highlight)
      (pdf-util-munch-file (caar response)))
@@ -658,6 +662,43 @@ interrupted."
                                                (split-string r " " t)))
                                      rest)))))))))
       (append a1 a2 a3))))
+
+;; This must stay in sync with the server's getformfields command.
+(defun pdf-info-query--transform-form-field (f)
+  "Transform form field F."
+  (let* ((type (intern (nth 3 f)))
+         (value (nth 7 f)))
+    `((page . ,(string-to-number (nth 0 f)))
+      (edges . ,(mapcar #'string-to-number
+                        (split-string (nth 1 f) " " t)))
+      (id . ,(string-to-number (nth 2 f)))
+      (type . ,type)
+      (name . ,(nth 4 f))
+      (read-only . ,(equal (nth 5 f) "1"))
+      (flags . ,(mapcar #'intern (split-string (nth 6 f) " " t)))
+      (value . ,(cl-case type
+                  ((checkbox radio) (equal value "1"))
+                  ((combo list) (mapcar #'string-to-number
+                                        (split-string value " " t)))
+                  (push nil)
+                  (t value)))
+      ,@(when (memq type '(combo list))
+          `((text . ,(nth 8 f))
+            (items . ,(nthcdr 9 f)))))))
+
+(defun pdf-info-query--transform-signature (s)
+  "Transform signature validation S."
+  (cl-labels ((not-empty (s)
+                (if (not (equal s "")) s)))
+    `((signature-status . ,(intern (nth 0 s)))
+      (certificate-status . ,(intern (nth 1 s)))
+      (signer . ,(not-empty (nth 2 s)))
+      (signing-time . ,(not-empty (nth 3 s)))
+      (subject . ,(not-empty (nth 4 s)))
+      (subject-organization . ,(not-empty (nth 5 s)))
+      (issuer . ,(not-empty (nth 6 s)))
+      (issuer-organization . ,(not-empty (nth 7 s)))
+      (expires . ,(not-empty (nth 8 s))))))
 
 (defun pdf-info-query--transform-attachment (a)
   (cl-labels ((not-empty (s)
@@ -1526,6 +1567,80 @@ returned and owned by the caller."
   (pdf-info-query
    'save
    (pdf-info--normalize-file-or-buffer file-or-buffer)))
+
+(defun pdf-info-formfields (page &optional file-or-buffer)
+  "Return the form fields on PAGE in document FILE-OR-BUFFER.
+
+Each field is an alist with the following keys.  PAGE, EDGES, the
+relative bounding-box of the field's widget, ID, a number
+identifying it, TYPE, NAME, its fully qualified name, READ-ONLY,
+FLAGS and VALUE.
+
+TYPE is one of text, multiline, password, file-select, checkbox,
+radio, push, combo, list, signature or unknown.
+
+VALUE is a string for text fields, non-nil for a checkbox or
+radio button that is on, and a list of the indices of the selected
+ITEMS for combo and list fields, which have this additional key.
+It is nil for all other fields.
+
+FLAGS is a list of symbols: `multiple', if more than one item of
+a combo or list field may be selected, and `editable', if a combo
+field accepts other text than its items.  Such a field has an
+additional key TEXT, the text a user typed into it."
+  (pdf-info-query
+   'getformfields
+   (pdf-info--normalize-file-or-buffer file-or-buffer)
+   page))
+
+(defun pdf-info-setformfield (id value &optional file-or-buffer)
+  "Set the form field ID to VALUE in FILE-OR-BUFFER.
+
+ID is a field's id as returned by `pdf-info-formfields'.  VALUE
+has the form described there for the field's type.
+
+This changes the document only in memory; save it with
+`pdf-info-save'."
+  (pdf-info-query
+   'setformfield
+   (pdf-info--normalize-file-or-buffer file-or-buffer)
+   id
+   (cond
+    ((stringp value) value)
+    ((listp value) (mapconcat #'number-to-string value " "))
+    (t "1"))))
+
+(defun pdf-info-setformfield-text (id text &optional file-or-buffer)
+  "Set the editable combo field ID to TEXT in FILE-OR-BUFFER.
+
+TEXT need not be one of the field's items."
+  (pdf-info-query
+   'setformfield-text
+   (pdf-info--normalize-file-or-buffer file-or-buffer)
+   id
+   text))
+
+(defun pdf-info-signatures-p ()
+  (not (null (memq 'signatures (pdf-info-features)))))
+
+(defun pdf-info-validatesignature (id &optional file-or-buffer)
+  "Validate the signature of field ID in FILE-OR-BUFFER.
+
+Return an alist with the keys SIGNATURE-STATUS, one of `valid',
+`invalid', `digest-mismatch', `decoding-error', `not-found' or
+`error', CERTIFICATE-STATUS, one of `trusted', `untrusted-issuer',
+`unknown-issuer', `revoked', `expired', `not-verified' or `error',
+SIGNER, SIGNING-TIME, SUBJECT, SUBJECT-ORGANIZATION, ISSUER,
+ISSUER-ORGANIZATION and EXPIRES.  Times are ISO 8601 strings.
+Values that are not available are nil.
+
+The certificate's revocation is not checked online."
+  (unless (pdf-info-signatures-p)
+    (error "Validating signatures is not supported by this version of epdfinfo"))
+  (pdf-info-query
+   'validatesignature
+   (pdf-info--normalize-file-or-buffer file-or-buffer)
+   id))
 
 (defun pdf-info-getattachment-from-annot (id &optional do-save file-or-buffer)
   "Return the attachment associated with annotation ID.

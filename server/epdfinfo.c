@@ -2035,9 +2035,15 @@ cmd_features (const epdfinfo_t *ctx, const command_arg_t *args)
     "no-writable-annotations",
 #endif
 #ifdef HAVE_POPPLER_ANNOT_MARKUP
-    "markup-annotations"
+    "markup-annotations",
 #else
-    "no-markup-annotations"
+    "no-markup-annotations",
+#endif
+    "form-fields",
+#ifdef HAVE_POPPLER_SIGNATURES
+    "signatures"
+#else
+    "no-signatures"
 #endif
   };
   int i;
@@ -3203,6 +3209,378 @@ cmd_save (const epdfinfo_t *ctx, const command_arg_t *args)
 #endif  /* HAVE_POPPLER_ANNOT_WRITE */
 
 
+/* ================================================================== *
+ * Form fields
+ * ================================================================== */
+
+static const char *
+form_field_type_string (PopplerFormField *field)
+{
+  switch (poppler_form_field_get_field_type (field))
+    {
+    case POPPLER_FORM_FIELD_TEXT:
+      switch (poppler_form_field_text_get_text_type (field))
+        {
+        case POPPLER_FORM_TEXT_MULTILINE: return "multiline";
+        case POPPLER_FORM_TEXT_FILE_SELECT: return "file-select";
+        default:
+          return poppler_form_field_text_is_password (field)
+            ? "password" : "text";
+        }
+    case POPPLER_FORM_FIELD_BUTTON:
+      switch (poppler_form_field_button_get_button_type (field))
+        {
+        case POPPLER_FORM_BUTTON_CHECK: return "checkbox";
+        case POPPLER_FORM_BUTTON_RADIO: return "radio";
+        default: return "push";
+        }
+    case POPPLER_FORM_FIELD_CHOICE:
+      return poppler_form_field_choice_get_choice_type (field)
+        == POPPLER_FORM_CHOICE_COMBO ? "combo" : "list";
+    case POPPLER_FORM_FIELD_SIGNATURE: return "signature";
+    default: return "unknown";
+    }
+}
+
+/* Name: getformfields
+   Args: filename page
+   Returns: A list of form fields on page, one per line:
+
+   page edges id type name read-only flags value [text item ...]
+
+   where type is one of text, multiline, password, file-select,
+   checkbox, radio, push, combo, list, signature or unknown.  Flags
+   is a space separated list of the words multiple, if more than one
+   item of a choice field may be selected, and editable, if a combo
+   field accepts text other than its items.  The value is the text of
+   a text field, 1 or 0 for a checkbox or radio button, empty for
+   other buttons, and the space separated indices of the selected
+   items of a combo or list field.  The text a user typed into an
+   editable combo field and the field's items follow those of choice
+   fields.
+
+   Errors: If page is out of range.
+*/
+
+const command_arg_type_t cmd_getformfields_spec[] =
+  {
+    ARG_DOC,
+    ARG_NATNUM                  /* page number */
+  };
+
+static void
+cmd_getformfields (const epdfinfo_t *ctx, const command_arg_t *args)
+{
+  PopplerDocument *doc = args[0].value.doc->pdf;
+  int pn = args[1].value.natnum;
+  PopplerPage *page = NULL;
+  GList *field_map = NULL, *item;
+  double width, height;
+
+  page = poppler_document_get_page (doc, pn - 1);
+  perror_if_not (page, "No such page %d", pn);
+  poppler_page_get_size (page, &width, &height);
+  field_map = poppler_page_get_form_field_mapping (page);
+
+  OK_BEGIN ();
+  for (item = g_list_last (field_map); item; item = item->prev)
+    {
+      PopplerFormFieldMapping *m = item->data;
+      PopplerFormField *field = m->field;
+      PopplerRectangle *r = &m->area;
+      gchar *name = poppler_form_field_get_name (field);
+      gchar *text;
+      int i, n;
+
+      printf ("%d:", pn);
+      /* Mappings have a different gravity, see cmd_pagelinks. */
+      printf ("%f %f %f %f:",
+              r->x1 / width, (height - r->y2) / height,
+              r->x2 / width, (height - r->y1) / height);
+      printf ("%d:", poppler_form_field_get_id (field));
+      printf ("%s:", form_field_type_string (field));
+      print_response_string (name, COLON);
+      printf ("%d:", poppler_form_field_is_read_only (field) ? 1 : 0);
+      g_free (name);
+
+      /* Flags */
+      if (poppler_form_field_get_field_type (field) == POPPLER_FORM_FIELD_CHOICE)
+        {
+          if (poppler_form_field_choice_can_select_multiple (field))
+            printf ("multiple ");
+          if (poppler_form_field_choice_is_editable (field))
+            printf ("editable");
+        }
+      putchar (':');
+
+      switch (poppler_form_field_get_field_type (field))
+        {
+        case POPPLER_FORM_FIELD_TEXT:
+          text = poppler_form_field_text_get_text (field);
+          print_response_string (text, NEWLINE);
+          g_free (text);
+          break;
+        case POPPLER_FORM_FIELD_BUTTON:
+          if (poppler_form_field_button_get_button_type (field)
+              == POPPLER_FORM_BUTTON_PUSH)
+            putchar ('\n');
+          else
+            printf ("%d\n", poppler_form_field_button_get_state (field) ? 1 : 0);
+          break;
+        case POPPLER_FORM_FIELD_CHOICE:
+          n = poppler_form_field_choice_get_n_items (field);
+          for (i = 0; i < n; ++i)
+            if (poppler_form_field_choice_is_item_selected (field, i))
+              printf ("%d ", i);
+          putchar (':');
+          text = poppler_form_field_choice_is_editable (field)
+            ? poppler_form_field_choice_get_text (field) : NULL;
+          print_response_string (text, NONE);
+          g_free (text);
+          for (i = 0; i < n; ++i)
+            {
+              text = poppler_form_field_choice_get_item (field, i);
+              putchar (':');
+              print_response_string (text, NONE);
+              g_free (text);
+            }
+          putchar ('\n');
+          break;
+        default:
+          putchar ('\n');
+        }
+    }
+  OK_END ();
+
+ error:
+  if (field_map) poppler_page_free_form_field_mapping (field_map);
+  if (page) g_object_unref (page);
+}
+
+/* Name: setformfield
+   Args: filename id value
+   Returns: Nothing
+   Errors: If there is no such field, it is read-only or can't be set.
+
+   The value is the text of a text field, 1 or 0 for a checkbox or
+   radio button and the space separated indices of the items to
+   select for a combo or list field.
+*/
+
+const command_arg_type_t cmd_setformfield_spec[] =
+  {
+    ARG_DOC,
+    ARG_NATNUM,                 /* field id */
+    ARG_STRING                  /* value */
+  };
+
+static void
+cmd_setformfield (const epdfinfo_t *ctx, const command_arg_t *args)
+{
+  PopplerDocument *doc = args[0].value.doc->pdf;
+  int id = args[1].value.natnum;
+  const char *value = args[2].value.string;
+  PopplerFormField *field = poppler_document_get_form_field (doc, id);
+  gchar **indices = NULL, **index;
+  int n;
+
+  perror_if_not (field, "No such form field: %d", id);
+  perror_if_not (! poppler_form_field_is_read_only (field),
+                 "Form field is read-only: %d", id);
+
+  switch (poppler_form_field_get_field_type (field))
+    {
+    case POPPLER_FORM_FIELD_TEXT:
+      poppler_form_field_text_set_text (field, value);
+      break;
+    case POPPLER_FORM_FIELD_BUTTON:
+      perror_if_not (poppler_form_field_button_get_button_type (field)
+                     != POPPLER_FORM_BUTTON_PUSH,
+                     "Can't set a push button: %d", id);
+      poppler_form_field_button_set_state (field, strcmp (value, "1") == 0);
+      break;
+    case POPPLER_FORM_FIELD_CHOICE:
+      n = poppler_form_field_choice_get_n_items (field);
+      indices = g_strsplit (value, " ", -1);
+      for (index = indices; *index; ++index)
+        {
+          char *end;
+          long i;
+
+          if (! **index)
+            continue;
+          i = strtol (*index, &end, 10);
+          perror_if_not (! *end && i >= 0 && i < n,
+                         "Invalid item index: %s", *index);
+        }
+      poppler_form_field_choice_unselect_all (field);
+      for (index = indices; *index; ++index)
+        if (**index)
+          poppler_form_field_choice_toggle_item (field, atoi (*index));
+      break;
+    default:
+      perror_if_not (0, "Can't set this kind of form field: %d", id);
+    }
+
+  OK_BEGIN ();
+  OK_END ();
+
+ error:
+  if (indices) g_strfreev (indices);
+  if (field) g_object_unref (field);
+}
+
+/* Name: setformfield-text
+   Args: filename id text
+   Returns: Nothing
+   Errors: If there is no such field, it is read-only or not an
+   editable combo field.
+
+   Sets the text of an editable combo field to one that need not be
+   one of its items.
+*/
+
+const command_arg_type_t cmd_setformfield_text_spec[] =
+  {
+    ARG_DOC,
+    ARG_NATNUM,                 /* field id */
+    ARG_STRING                  /* text */
+  };
+
+static void
+cmd_setformfield_text (const epdfinfo_t *ctx, const command_arg_t *args)
+{
+  PopplerDocument *doc = args[0].value.doc->pdf;
+  int id = args[1].value.natnum;
+  const char *text = args[2].value.string;
+  PopplerFormField *field = poppler_document_get_form_field (doc, id);
+
+  perror_if_not (field, "No such form field: %d", id);
+  perror_if_not (! poppler_form_field_is_read_only (field),
+                 "Form field is read-only: %d", id);
+  perror_if_not (poppler_form_field_get_field_type (field)
+                 == POPPLER_FORM_FIELD_CHOICE
+                 && poppler_form_field_choice_is_editable (field),
+                 "Not an editable choice field: %d", id);
+  poppler_form_field_choice_set_text (field, text);
+
+  OK_BEGIN ();
+  OK_END ();
+
+ error:
+  if (field) g_object_unref (field);
+}
+
+#ifdef HAVE_POPPLER_SIGNATURES
+
+static const char *
+signature_status_string (PopplerSignatureStatus status)
+{
+  switch (status)
+    {
+    case POPPLER_SIGNATURE_VALID: return "valid";
+    case POPPLER_SIGNATURE_INVALID: return "invalid";
+    case POPPLER_SIGNATURE_DIGEST_MISMATCH: return "digest-mismatch";
+    case POPPLER_SIGNATURE_DECODING_ERROR: return "decoding-error";
+    case POPPLER_SIGNATURE_NOT_FOUND: return "not-found";
+    default: return "error";
+    }
+}
+
+static const char *
+certificate_status_string (PopplerCertificateStatus status)
+{
+  switch (status)
+    {
+    case POPPLER_CERTIFICATE_TRUSTED: return "trusted";
+    case POPPLER_CERTIFICATE_UNTRUSTED_ISSUER: return "untrusted-issuer";
+    case POPPLER_CERTIFICATE_UNKNOWN_ISSUER: return "unknown-issuer";
+    case POPPLER_CERTIFICATE_REVOKED: return "revoked";
+    case POPPLER_CERTIFICATE_EXPIRED: return "expired";
+    case POPPLER_CERTIFICATE_NOT_VERIFIED: return "not-verified";
+    default: return "error";
+    }
+}
+
+static void
+print_date_time (GDateTime *time, enum suffix_char suffix)
+{
+  gchar *str = time ? g_date_time_format_iso8601 (time) : NULL;
+
+  print_response_string (str, suffix);
+  g_free (str);
+}
+
+/* Name: validatesignature
+   Args: filename id
+   Returns: The signature's status, its certificate's status, the
+   signer's name, the signing time, the common name and organization
+   of the certificate's subject and issuer, and its expiration time:
+
+   signature-status certificate-status signer signing-time
+   subject subject-organization issuer issuer-organization expires
+
+   The statuses are one of valid, invalid, digest-mismatch,
+   decoding-error, not-found or error, respectively trusted,
+   untrusted-issuer, unknown-issuer, revoked, expired, not-verified
+   or error.  Times are in ISO 8601 format.  The certificate's
+   revocation is not checked online.
+
+   Errors: If there is no such field or it is not a signature field.
+*/
+
+const command_arg_type_t cmd_validatesignature_spec[] =
+  {
+    ARG_DOC,
+    ARG_NATNUM                  /* field id */
+  };
+
+static void
+cmd_validatesignature (const epdfinfo_t *ctx, const command_arg_t *args)
+{
+  PopplerDocument *doc = args[0].value.doc->pdf;
+  int id = args[1].value.natnum;
+  PopplerFormField *field = poppler_document_get_form_field (doc, id);
+  PopplerSignatureInfo *info = NULL;
+  PopplerCertificateInfo *cert;
+  GError *gerror = NULL;
+
+  perror_if_not (field, "No such form field: %d", id);
+  perror_if_not (poppler_form_field_get_field_type (field)
+                 == POPPLER_FORM_FIELD_SIGNATURE,
+                 "Not a signature field: %d", id);
+  info = poppler_form_field_signature_validate_sync
+    (field,
+     POPPLER_SIGNATURE_VALIDATION_FLAG_VALIDATE_CERTIFICATE
+     | POPPLER_SIGNATURE_VALIDATION_FLAG_WITHOUT_OCSP_REVOCATION_CHECK,
+     NULL, &gerror);
+  perror_if_not (info, "Unable to validate signature: %s",
+                 gerror ? gerror->message : "?");
+  cert = poppler_signature_info_get_certificate_info (info);
+
+  OK_BEGIN ();
+  printf ("%s:", signature_status_string
+          (poppler_signature_info_get_signature_status (info)));
+  printf ("%s:", certificate_status_string
+          (poppler_signature_info_get_certificate_status (info)));
+  print_response_string (poppler_signature_info_get_signer_name (info), COLON);
+  print_date_time (poppler_signature_info_get_local_signing_time (info), COLON);
+  print_response_string (cert ? poppler_certificate_info_get_subject_common_name (cert) : NULL, COLON);
+  print_response_string (cert ? poppler_certificate_info_get_subject_organization (cert) : NULL, COLON);
+  print_response_string (cert ? poppler_certificate_info_get_issuer_common_name (cert) : NULL, COLON);
+  print_response_string (cert ? poppler_certificate_info_get_issuer_organization (cert) : NULL, COLON);
+  print_date_time (cert ? poppler_certificate_info_get_expiration_time (cert) : NULL, NEWLINE);
+  OK_END ();
+
+ error:
+  if (gerror) g_error_free (gerror);
+  if (info) poppler_signature_info_free (info);
+  if (field) g_object_unref (field);
+}
+
+#endif  /* HAVE_POPPLER_SIGNATURES */
+
+
 const command_arg_type_t cmd_synctex_forward_search_spec[] =
   {
     ARG_DOC,
@@ -3875,6 +4253,14 @@ static const command_t commands [] =
     /* Attachments */
     DEC_CMD2 (getattachment_from_annot, "getattachment-from-annot"),
     DEC_CMD (getattachments),
+
+    /* Forms */
+    DEC_CMD (getformfields),
+    DEC_CMD (setformfield),
+    DEC_CMD2 (setformfield_text, "setformfield-text"),
+#ifdef HAVE_POPPLER_SIGNATURES
+    DEC_CMD (validatesignature),
+#endif
 
     /* Synctex */
     DEC_CMD2 (synctex_forward_search, "synctex-forward-search"),
