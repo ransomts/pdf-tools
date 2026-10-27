@@ -1,5 +1,9 @@
 % Test fixture for pdf-form: one field of each kind.
-% Rebuild with: pdflatex forms.tex
+% Rebuild with: pdflatex forms.tex, then give the `name' field a
+% tooltip (/TU), which hyperref can't, with qpdf:
+%   qpdf --qdf --object-streams=disable forms.pdf qdf.pdf
+%   sed -i 's|^\(\s*\)/T <feff006e0061006d0065>$|&\n\1/TU (Your full name)|' qdf.pdf
+%   fix-qdf qdf.pdf > fixed.pdf && qpdf fixed.pdf forms.pdf
 %
 % signed.pdf is this form signed with a self-signed test certificate:
 %   openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem \
@@ -24,6 +28,8 @@
 \ChoiceMenu[name=size,radio=true]{Size:}{Small,Large}\par\bigskip
 \ChoiceMenu[name=fruit,width=3cm,height=1.5cm]{Fruit:}{Apple,Pear,Plum}\par\bigskip
 \ChoiceMenu[name=pet,combo=true,edit=true]{Pet:}{Cat,Dog}\par\bigskip
-\ChoiceMenu[name=tags,multiselect=true,width=3cm,height=1.5cm]{Tags:}{Red,Green,Blue}
+\ChoiceMenu[name=tags,multiselect=true,width=3cm,height=1.5cm]{Tags:}{Red,Green,Blue}\par\bigskip
+\TextField[name=zip,maxlen=5,width=2cm]{ZIP:}\par\bigskip
+\Reset{Clear form}
 \end{Form}
 \end{document}

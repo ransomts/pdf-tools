@@ -2040,6 +2040,11 @@ cmd_features (const epdfinfo_t *ctx, const command_arg_t *args)
     "no-markup-annotations",
 #endif
     "form-fields",
+#ifdef HAVE_POPPLER_FORM_RESET
+    "form-reset",
+#else
+    "no-form-reset",
+#endif
 #ifdef HAVE_POPPLER_SIGNATURES
     "signatures"
 #else
@@ -3242,17 +3247,38 @@ form_field_type_string (PopplerFormField *field)
     }
 }
 
+#ifdef HAVE_POPPLER_FORM_RESET
+/* Return the reset-form action of push button FIELD, or NULL. */
+static PopplerActionResetForm *
+form_field_reset_action (PopplerFormField *field)
+{
+  PopplerAction *action;
+
+  if (poppler_form_field_get_field_type (field) != POPPLER_FORM_FIELD_BUTTON
+      || poppler_form_field_button_get_button_type (field)
+      != POPPLER_FORM_BUTTON_PUSH)
+    return NULL;
+  action = poppler_form_field_get_action (field);
+  return action && action->type == POPPLER_ACTION_RESET_FORM
+    ? &action->reset_form : NULL;
+}
+#endif
+
 /* Name: getformfields
    Args: filename page
    Returns: A list of form fields on page, one per line:
 
-   page edges id type name read-only flags value [text item ...]
+   page edges id type name tooltip read-only flags max-length value
+   [text item ...]
 
    where type is one of text, multiline, password, file-select,
-   checkbox, radio, push, combo, list, signature or unknown.  Flags
-   is a space separated list of the words multiple, if more than one
-   item of a choice field may be selected, and editable, if a combo
-   field accepts text other than its items.  The value is the text of
+   checkbox, radio, push, combo, list, signature or unknown.  The
+   tooltip is the field's user-facing description, if it has one.
+   Flags is a space separated list of the words multiple, if more
+   than one item of a choice field may be selected, editable, if a
+   combo field accepts text other than its items, and reset, if a
+   push button resets the form.  Max-length is the most characters a
+   text field takes, or empty if it has no limit.  The value is the text of
    a text field, 1 or 0 for a checkbox or radio button, empty for
    other buttons, and the space separated indices of the selected
    items of a combo or list field.  The text a user typed into an
@@ -3300,8 +3326,15 @@ cmd_getformfields (const epdfinfo_t *ctx, const command_arg_t *args)
       printf ("%d:", poppler_form_field_get_id (field));
       printf ("%s:", form_field_type_string (field));
       print_response_string (name, COLON);
-      printf ("%d:", poppler_form_field_is_read_only (field) ? 1 : 0);
       g_free (name);
+#ifdef HAVE_POPPLER_FORM_TOOLTIP
+      text = poppler_form_field_get_alternate_ui_name (field);
+      print_response_string (text, COLON);
+      g_free (text);
+#else
+      putchar (':');
+#endif
+      printf ("%d:", poppler_form_field_is_read_only (field) ? 1 : 0);
 
       /* Flags */
       if (poppler_form_field_get_field_type (field) == POPPLER_FORM_FIELD_CHOICE)
@@ -3311,6 +3344,16 @@ cmd_getformfields (const epdfinfo_t *ctx, const command_arg_t *args)
           if (poppler_form_field_choice_is_editable (field))
             printf ("editable");
         }
+#ifdef HAVE_POPPLER_FORM_RESET
+      if (form_field_reset_action (field))
+        printf ("reset");
+#endif
+      putchar (':');
+
+      /* Max-length */
+      if (poppler_form_field_get_field_type (field) == POPPLER_FORM_FIELD_TEXT
+          && poppler_form_field_text_get_max_len (field) > 0)
+        printf ("%d", poppler_form_field_text_get_max_len (field));
       putchar (':');
 
       switch (poppler_form_field_get_field_type (field))
@@ -3429,6 +3472,49 @@ cmd_setformfield (const epdfinfo_t *ctx, const command_arg_t *args)
   if (indices) g_strfreev (indices);
   if (field) g_object_unref (field);
 }
+
+#ifdef HAVE_POPPLER_FORM_RESET
+/* Name: resetform
+   Args: filename id
+   Returns: Nothing
+   Errors: If ID is not 0 and not a push button that resets the form.
+
+   Resets the fields of the form to their default values: all of
+   them if ID is 0, otherwise the ones the reset button ID names.
+*/
+
+const command_arg_type_t cmd_resetform_spec[] =
+  {
+    ARG_DOC,
+    ARG_NATNUM                  /* field id, or 0 */
+  };
+
+static void
+cmd_resetform (const epdfinfo_t *ctx, const command_arg_t *args)
+{
+  PopplerDocument *doc = args[0].value.doc->pdf;
+  int id = args[1].value.natnum;
+  PopplerFormField *field = NULL;
+  PopplerActionResetForm *reset;
+
+  if (id == 0)
+    poppler_document_reset_form (doc, NULL, FALSE);
+  else
+    {
+      field = poppler_document_get_form_field (doc, id);
+      perror_if_not (field, "No such form field: %d", id);
+      reset = form_field_reset_action (field);
+      perror_if_not (reset, "Not a reset button: %d", id);
+      poppler_document_reset_form (doc, reset->fields, reset->exclude);
+    }
+
+  OK_BEGIN ();
+  OK_END ();
+
+ error:
+  if (field) g_object_unref (field);
+}
+#endif  /* HAVE_POPPLER_FORM_RESET */
 
 /* Name: setformfield-text
    Args: filename id text
@@ -4258,6 +4344,9 @@ static const command_t commands [] =
     DEC_CMD (getformfields),
     DEC_CMD (setformfield),
     DEC_CMD2 (setformfield_text, "setformfield-text"),
+#ifdef HAVE_POPPLER_FORM_RESET
+    DEC_CMD (resetform),
+#endif
 #ifdef HAVE_POPPLER_SIGNATURES
     DEC_CMD (validatesignature),
 #endif
