@@ -21,6 +21,7 @@ HAVE_POPPLER_SIGNATURES="no   (requires poppler-glib >= 21.12)"
 HAVE_POPPLER_STRUCTURE="no   (requires poppler-glib >= 0.26)"
 HAVE_POPPLER_ANNOT_SHAPES="no (requires poppler-glib >= 0.26)"
 HAVE_POPPLER_ANNOT_STAMP="no (requires poppler-glib >= 22.07)"
+HAVE_POPPLER_FORM_RESET="no   (requires poppler-glib >= 0.90)"
 
 PKG_CHECK_MODULES([png], [libpng])
 PKG_CHECK_MODULES([glib], [glib-2.0])
@@ -33,6 +34,9 @@ PKG_CHECK_EXISTS([poppler-glib >= 21.12], [HAVE_POPPLER_SIGNATURES=yes])
 PKG_CHECK_EXISTS([poppler-glib >= 0.26], [HAVE_POPPLER_STRUCTURE=yes])
 PKG_CHECK_EXISTS([poppler-glib >= 0.26], [HAVE_POPPLER_ANNOT_SHAPES=yes])
 PKG_CHECK_EXISTS([poppler-glib >= 22.07], [HAVE_POPPLER_ANNOT_STAMP=yes])
+PKG_CHECK_EXISTS([poppler-glib >= 0.88], [AC_DEFINE([HAVE_POPPLER_FORM_TOOLTIP],1,
+  [Define to 1 to read form field tooltips (requires poppler-glib >= 0.88).])])
+PKG_CHECK_EXISTS([poppler-glib >= 0.90], [HAVE_POPPLER_FORM_RESET=yes])
 PKG_CHECK_MODULES([zlib], [zlib])
 
 AC_COMPILE_IFELSE(
@@ -64,6 +68,11 @@ fi
 if test "$HAVE_POPPLER_ANNOT_MARKUP" = yes; then
   AC_DEFINE([HAVE_POPPLER_ANNOT_MARKUP],1,
     [Define to 1 to enable adding of markup annotations (requires poppler-glib >= 0.26).])
+fi
+
+if test "$HAVE_POPPLER_FORM_RESET" = yes; then
+  AC_DEFINE([HAVE_POPPLER_FORM_RESET],1,
+    [Define to 1 to enable resetting forms (requires poppler-glib >= 0.90).])
 fi
 
 if test "$HAVE_POPPLER_SIGNATURES" = yes; then
@@ -121,6 +130,7 @@ echo
 echo "Is case-sensitive searching enabled ?     ${HAVE_POPPLER_FIND_OPTS}"
 echo "Is modifying text annotations enabled ?   ${HAVE_POPPLER_ANNOT_WRITE}"
 echo "Is modifying markup annotations enabled ? ${HAVE_POPPLER_ANNOT_MARKUP}"
+echo "Is resetting forms enabled ?              ${HAVE_POPPLER_FORM_RESET}"
 echo "Is validating signatures enabled ?        ${HAVE_POPPLER_SIGNATURES}"
 echo "Is reading the structure tree enabled ?   ${HAVE_POPPLER_STRUCTURE}"
 echo "Is adding shape annotations enabled ?     ${HAVE_POPPLER_ANNOT_SHAPES}"
