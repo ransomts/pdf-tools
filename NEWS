@@ -10,6 +10,10 @@
   + The grid reflows to the window width, labels each thumbnail with its page label, and highlights the current page. ~RET~ or a click shows a page.
   + Thumbnails render asynchronously, those in view first, so long documents open at once. They follow ~pdf-view-midnight-minor-mode~.
   + Mark pages with ~m~, ~u~, ~U~ as in Dired, then delete (~D~), extract (~X~), move (~M~) or rotate (~R~ / ~L~) them with the operations of ~pdf-pages-minor-mode~.
+- Add ~pdf-present~, a presenter view for giving talks from a PDF
+  + ~M-x pdf-present~ opens an audience frame with the current slide alone, full screen on another monitor (~pdf-present-audience-monitor~, or ~C-u M-x pdf-present~ to choose), and a presenter frame with the current and next slides, the speaker notes, the slide counter (with page labels), the elapsed time and the clock.
+  + Speaker notes come from Beamer PDFs built with =show notes on second screen=right= (slide and notes side by side on each page) or =show notes= (separate notes pages, which the audience never sees); ~pdf-present-notes-layout~ detects which by default.
+  + Keys in both frames: ~n~ / ~p~ (also PageDown/PageUp and the arrow keys that clickers send), ~<~ / ~>~, ~g~ to go to a slide, ~b~ / ~w~ for a black or white screen, ~t~ / ~r~ to pause or reset the timer, ~q~ to quit and restore the buffer, windows and frames.
 
 * Version 1.3.0
 ** New functionality to improve overall user experience
