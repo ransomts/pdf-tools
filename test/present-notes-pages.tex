@@ -1,0 +1,13 @@
+% pdf-present test deck: a separate notes page after each slide that has
+% a \note.  Used by test/pdf-present-test.el.
+%
+% The three present-*.tex decks share present-slides.tex and differ only
+% in the \setbeameroption line.  Rebuild one from test/ with
+%   pdflatex present-notes-pages.tex && pdflatex present-notes-pages.tex
+% and delete the .aux/.log/.nav/.out/.snm/.toc files afterwards.
+\documentclass[aspectratio=169]{beamer}
+\setbeamertemplate{navigation symbols}{}
+\setbeameroption{show notes}
+\begin{document}
+\input{present-slides}
+\end{document}
