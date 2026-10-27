@@ -208,6 +208,142 @@
         (when (file-exists-p tempfile)
           (delete-file tempfile))))))
 
+(defun pdf-info-test--edges-equal (e1 e2)
+  "Return non-nil, if edges E1 and E2 are equal up to rounding."
+  (and (= (length e1) (length e2))
+       (cl-every (lambda (x y) (< (abs (- x y)) 1e-4)) e1 e2)))
+
+(ert-deftest pdf-info-creatable-annotation-types-shapes ()
+  (skip-unless (pdf-info-markup-annotations-p))
+  (let ((types (pdf-info-creatable-annotation-types)))
+    (should (eq (and (memq 'square types) t)
+                (pdf-info-shape-annotations-p)))
+    (should (eq (and (memq 'circle types) t)
+                (pdf-info-shape-annotations-p)))
+    (should (eq (and (memq 'line types) t)
+                (pdf-info-shape-annotations-p)))
+    (should (eq (and (memq 'stamp types) t)
+                (pdf-info-stamp-annotations-p)))))
+
+(ert-deftest pdf-info-addannot-square-circle ()
+  (skip-unless (pdf-info-shape-annotations-p))
+  (pdf-test-with-test-pdf
+    (dolist (type '(square circle))
+      (let* ((edges '(0.25 0.25 0.5 0.5))
+             (a (pdf-info-addannot 1 edges type))
+             (id (cdr (assq 'id a))))
+        (should (eq type (cdr (assq 'type a))))
+        (should (pdf-info-test--edges-equal edges (cdr (assq 'edges a))))
+        (should (null (cdr (assq 'interior-color a))))
+        (setq a (pdf-info-editannot id '((color . "#ff0000")
+                                         (interior-color . "#00ff00"))))
+        (should (equal "#ff0000" (cdr (assq 'color a))))
+        (should (equal "#00ff00" (cdr (assq 'interior-color a))))
+        (should (equal "#00ff00"
+                       (cdr (assq 'interior-color (pdf-info-getannot id)))))
+        ;; nil removes the fill color.
+        (setq a (pdf-info-editannot id '((interior-color))))
+        (should (null (cdr (assq 'interior-color a))))
+        (pdf-info-mvannot id '(0.5 0.5 0.75 0.75))
+        (should (pdf-info-test--edges-equal
+                 '(0.5 0.5 0.75 0.75)
+                 (cdr (assq 'edges (pdf-info-getannot id)))))
+        (should-error (pdf-info-editannot id '((icon . "Approved"))))
+        (should-error (pdf-info-editannot id '((line 0 0 1 1)))))))
+  (pdf-test-with-test-pdf
+    (should-error (pdf-info-addannot 1 '(0 0 1 1) 'square nil nil
+                                     '(0 0 1 1)))))
+
+(ert-deftest pdf-info-addannot-line ()
+  (skip-unless (pdf-info-shape-annotations-p))
+  (pdf-test-with-test-pdf
+    ;; Without points, the line is the diagonal of the edges.
+    (let ((a (pdf-info-addannot 1 '(0.25 0.25 0.5 0.5) 'line)))
+      (should (eq 'line (cdr (assq 'type a))))
+      (should (pdf-info-test--edges-equal '(0.25 0.25 0.5 0.5)
+                                          (cdr (assq 'edges a)))))
+    ;; With points, the edges are their bounding box plus a margin.
+    (let* ((a (pdf-info-addannot 1 '(0 0 1 1) 'line nil nil
+                                 '(0.75 0.25 0.25 0.5)))
+           (id (cdr (assq 'id a)))
+           (edges (cdr (assq 'edges a))))
+      (should (pdf-test-relative-edges-p edges))
+      (should (< 0.24 (nth 0 edges) 0.25))
+      (should (< 0.24 (nth 1 edges) 0.25))
+      (should (< 0.75 (nth 2 edges) 0.76))
+      (should (< 0.5 (nth 3 edges) 0.51))
+      ;; Lines are moved by their points, not their edges.
+      (should-error (pdf-info-mvannot id '(0 0 0.1 0.1)))
+      (setq edges (cdr (assq 'edges (pdf-info-editannot
+                                     id '((line 0.1 0.1 0.2 0.2)
+                                          (color . "#0000ff"))))))
+      (should (< 0.09 (nth 0 edges) 0.1))
+      (should (< 0.2 (nth 3 edges) 0.21))
+      (should (equal "#0000ff"
+                     (cdr (assq 'color (pdf-info-getannot id))))))))
+
+(ert-deftest pdf-info-addannot-stamp ()
+  (skip-unless (pdf-info-stamp-annotations-p))
+  (pdf-test-with-test-pdf
+    (let* ((edges '(0.25 0.25 0.5 0.3))
+           (a (pdf-info-addannot 1 edges 'stamp nil nil "Approved"))
+           (id (cdr (assq 'id a))))
+      (should (eq 'stamp (cdr (assq 'type a))))
+      (should (pdf-info-test--edges-equal edges (cdr (assq 'edges a))))
+      (should (equal "Approved" (cdr (assq 'icon a))))
+      ;; Stamps are no markup annotations for epdfinfo.
+      (should-not (assq 'label a))
+      (should (equal "TopSecret"
+                     (cdr (assq 'icon (pdf-info-editannot
+                                       id '((icon . "TopSecret"))))))))
+    ;; Draft is the default, but can not be read back.
+    (should (null (cdr (assq 'icon (pdf-info-addannot 1 '(0 0 0.5 0.1)
+                                                      'stamp)))))
+    (should (pdf-info-addannot 1 '(0 0 0.5 0.1) 'stamp nil nil "Draft"))
+    (should-error (pdf-info-addannot 1 '(0 0 0.5 0.1) 'stamp nil nil
+                                     "NoSuchIcon"))
+    (let ((id (cdr (assq 'id (pdf-info-addannot 1 '(0 0 0.5 0.1) 'stamp)))))
+      (should-error (pdf-info-editannot id '((icon . "Draft"))))
+      (should-error (pdf-info-editannot id '((label . "Joe")))))))
+
+(ert-deftest pdf-info-save-shape-annotations ()
+  (skip-unless (and (pdf-info-shape-annotations-p)
+                    (pdf-info-stamp-annotations-p)))
+  (pdf-test-with-test-pdf
+    (dolist (id (mapcar (lambda (a)
+                          (cdr (assq 'id a)))
+                        (pdf-info-getannots)))
+      (pdf-info-delannot id))
+    (let ((square (pdf-info-addannot 1 '(0.1 0.1 0.2 0.2) 'square))
+          (line (pdf-info-addannot 1 '(0 0 1 1) 'line nil nil
+                                   '(0.1 0.5 0.9 0.5)))
+          tempfile)
+      (pdf-info-editannot (cdr (assq 'id square))
+                          '((color . "#ff0000") (interior-color . "#ffff00")))
+      (pdf-info-addannot 1 '(0.5 0.1 0.7 0.2) 'circle)
+      (pdf-info-addannot 1 '(0.1 0.7 0.5 0.8) 'stamp nil nil "Final")
+      (pdf-info-delannot (cdr (assq 'id line)))
+      (unwind-protect
+          (let (annots)
+            (setq tempfile (pdf-info-save))
+            (setq annots (pdf-info-getannots nil tempfile))
+            (should (equal '(circle square stamp)
+                           (sort (mapcar (lambda (a) (cdr (assq 'type a)))
+                                         annots)
+                                 #'string-lessp)))
+            (let ((square (cl-find 'square annots
+                                   :key (lambda (a) (cdr (assq 'type a))))))
+              (should (equal "#ff0000" (cdr (assq 'color square))))
+              (should (equal "#ffff00" (cdr (assq 'interior-color square))))
+              (should (pdf-info-test--edges-equal '(0.1 0.1 0.2 0.2)
+                                                  (cdr (assq 'edges square)))))
+            (should (equal "Final"
+                           (cdr (assq 'icon (cl-find 'stamp annots
+                                                     :key (lambda (a) (cdr (assq 'type a)))))))))
+        (when (and tempfile (file-exists-p tempfile))
+          (pdf-info-close tempfile)
+          (delete-file tempfile))))))
+
 (ert-deftest pdf-info-check-epdfinfo ()
   (should (progn (pdf-info-check-epdfinfo) t))
   (should-error

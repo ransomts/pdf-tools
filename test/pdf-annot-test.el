@@ -1,0 +1,126 @@
+;; -*- lexical-binding: t -*-
+
+(require 'pdf-annot)
+(require 'ert)
+
+(ert-deftest pdf-annot-property-modifiable-p-shapes ()
+  (let ((square '((type . square)))
+        (line '((type . line)))
+        (stamp '((type . stamp)))
+        (text '((type . text))))
+    (should (pdf-annot-property-modifiable-p square 'interior-color))
+    (should (pdf-annot-property-modifiable-p square 'edges))
+    (should (pdf-annot-property-modifiable-p square 'label))
+    (should-not (pdf-annot-property-modifiable-p square 'icon))
+    (should (pdf-annot-property-modifiable-p line 'line))
+    (should-not (pdf-annot-property-modifiable-p line 'edges))
+    (should-not (pdf-annot-property-modifiable-p line 'interior-color))
+    (should (pdf-annot-property-modifiable-p stamp 'icon))
+    (should-not (pdf-annot-property-modifiable-p stamp 'label))
+    (should (pdf-annot-property-modifiable-p text 'icon))
+    (should-not (pdf-annot-property-modifiable-p text 'interior-color))))
+
+(ert-deftest pdf-annot-shape-properties ()
+  (let ((pdf-annot-default-annotation-properties
+         '((t (label . "Joe"))
+           (square (color . "blue"))
+           (stamp (icon . "Final"))))
+        (pdf-annot-color-history nil))
+    (should (equal (pdf-annot--shape-properties 'square)
+                   '((color . "blue") (label . "Joe"))))
+    (should (equal (pdf-annot--shape-properties
+                    'square '((interior-color . "red")))
+                   '((interior-color . "red") (color . "blue")
+                     (label . "Joe"))))
+    (should (equal (pdf-annot--shape-properties 'circle)
+                   '((label . "Joe") (color . "#ff0000"))))
+    ;; Stamps have no label.
+    (should (equal (pdf-annot--shape-properties 'stamp)
+                   '((icon . "Final"))))
+    (should (equal (pdf-annot--shape-properties 'stamp '((icon . "Sold")))
+                   '((icon . "Sold"))))))
+
+(ert-deftest pdf-annot-region-rectangle ()
+  (should (equal (pdf-annot--region-rectangle '(1 (0.5 0.6 0.1 0.2)))
+                 '(0.1 0.2 0.5 0.6)))
+  (should (equal (pdf-annot--region-rectangle
+                  '(1 (0.1 0.1 0.2 0.2) (0.3 0.05 0.4 0.15)))
+                 '(0.1 0.05 0.4 0.2))))
+
+(ert-deftest pdf-annot-add-shape-annotations ()
+  (skip-unless (and (pdf-info-shape-annotations-p)
+                    (pdf-info-stamp-annotations-p)))
+  (pdf-test-with-test-pdf
+    (let ((pdf-annot-default-annotation-properties
+           '((t (label . "Joe"))
+             (stamp (icon . "Approved"))))
+          (pdf-annot-color-history nil)
+          (pdf-annot-activate-created-annotations nil))
+      (cl-letf (((symbol-function 'pdf-util-assert-pdf-window) #'ignore))
+        (let ((square (pdf-annot-add-square-annotation
+                       '(1 (0.5 0.5 0.25 0.25)) "blue"
+                       '((interior-color . "yellow"))))
+              (circle (pdf-annot-add-circle-annotation
+                       '(1 (0.1 0.1 0.2 0.2))))
+              (line (pdf-annot-add-line-annotation
+                     '(1 (0.9 0.1 0.6 0.4)) "green"))
+              (stamp (pdf-annot-add-stamp-annotation
+                      '(1 (0.1 0.7 0.5 0.8)))))
+          (should (buffer-modified-p))
+          (should (eq 'square (pdf-annot-get-type square)))
+          (should (equal '(0.25 0.25 0.5 0.5)
+                         (mapcar (lambda (x) (/ (round (* x 1000)) 1000.0))
+                                 (pdf-annot-get square 'edges))))
+          (should (equal "#0000ff" (pdf-annot-get square 'color)))
+          (should (equal "#ffff00" (pdf-annot-get square 'interior-color)))
+          (should (equal "Joe" (pdf-annot-get square 'label)))
+          (should (eq 'circle (pdf-annot-get-type circle)))
+          (should (equal "#ff0000" (pdf-annot-get circle 'color)))
+          (should (eq 'line (pdf-annot-get-type line)))
+          (should (equal "#00ff00" (pdf-annot-get line 'color)))
+          (should (< 0.59 (car (pdf-annot-get line 'edges)) 0.6))
+          (should (eq 'stamp (pdf-annot-get-type stamp)))
+          (should (equal "Approved" (pdf-annot-get stamp 'icon)))
+          ;; Edit, move and delete them.
+          (setq circle (pdf-annot-put circle 'interior-color "red"))
+          (should (equal "#ff0000" (pdf-annot-get circle 'interior-color)))
+          (setq stamp (pdf-annot-put stamp 'icon "Sold"))
+          (should (equal "Sold" (pdf-annot-get stamp 'icon)))
+          (setq square (pdf-annot-put square 'edges '(0.6 0.6 -1 -1)))
+          (should (< 0.849 (nth 2 (pdf-annot-get square 'edges)) 0.851))
+          (setq line (pdf-annot-put line 'line '(0.1 0.9 0.2 0.9)))
+          (should (< 0.89 (nth 1 (pdf-annot-get line 'edges)) 0.9))
+          (should-error (pdf-annot-put line 'edges '(0 0 1 1)))
+          (should-error (pdf-annot-put stamp 'label "Joe"))
+          (should-not (pdf-annot-delete circle))
+          (should (equal '(line square stamp)
+                         (sort (mapcar #'pdf-annot-get-type
+                                       (pdf-annot-getannots
+                                        nil '(square circle line stamp)))
+                               #'string-lessp)))
+          ;; Listed, unless the user says otherwise.
+          (should (cl-subsetp '(square circle line stamp)
+                              pdf-annot-list-listed-types))
+          (should (cl-every (lambda (a)
+                              (memq (pdf-annot-get-type a)
+                                    pdf-annot-list-listed-types))
+                            (pdf-annot-getannots
+                             nil '(square circle line stamp))))
+          (should (stringp (pdf-annot-print-property square
+                                                     'interior-color))))))))
+
+(ert-deftest pdf-annot-context-menu-shapes ()
+  (let ((square '((type . square) (id . annot-1-0)))
+        (stamp '((type . stamp) (id . annot-1-1))))
+    (cl-letf (((symbol-function 'pdf-info-writable-annotations-p) (lambda (&rest _) t))
+              ((symbol-function 'pdf-info-shape-annotations-p) (lambda (&rest _) t))
+              ((symbol-function 'pdf-info-stamp-annotations-p) (lambda (&rest _) t)))
+      (let ((menu (pdf-annot-create-context-menu square)))
+        (should (lookup-key menu [change-interior-color]))
+        (should (lookup-key menu [change-color]))
+        (should-not (lookup-key menu [change-stamp-icon])))
+      (let ((menu (pdf-annot-create-context-menu stamp)))
+        (should (lookup-key menu [change-stamp-icon]))
+        (should-not (lookup-key menu [change-color]))
+        (should (lookup-key menu [change-stamp-icon icon-Sold]))
+        (should-not (lookup-key menu [change-stamp-icon icon-Draft]))))))
