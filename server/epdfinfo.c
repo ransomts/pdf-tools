@@ -982,6 +982,72 @@ xpoppler_annot_text_state_string (PopplerAnnotTextState state)
     }
 };
 
+#ifdef HAVE_POPPLER_ANNOT_STAMP
+/* The standard stamp icons of the PDF specification, which poppler
+   is able to set (and draw).  Draft is the default icon of a newly
+   created stamp, but poppler-glib can neither set nor report it. */
+static const struct
+{
+  PopplerAnnotStampIcon icon;
+  const char *name;
+} xpoppler_annot_stamp_icons[] =
+  {
+    {POPPLER_ANNOT_STAMP_ICON_APPROVED, "Approved"},
+    {POPPLER_ANNOT_STAMP_ICON_AS_IS, "AsIs"},
+    {POPPLER_ANNOT_STAMP_ICON_CONFIDENTIAL, "Confidential"},
+    {POPPLER_ANNOT_STAMP_ICON_DEPARTMENTAL, "Departmental"},
+    {POPPLER_ANNOT_STAMP_ICON_EXPERIMENTAL, "Experimental"},
+    {POPPLER_ANNOT_STAMP_ICON_EXPIRED, "Expired"},
+    {POPPLER_ANNOT_STAMP_ICON_FINAL, "Final"},
+    {POPPLER_ANNOT_STAMP_ICON_FOR_COMMENT, "ForComment"},
+    {POPPLER_ANNOT_STAMP_ICON_FOR_PUBLIC_RELEASE, "ForPublicRelease"},
+    {POPPLER_ANNOT_STAMP_ICON_NOT_APPROVED, "NotApproved"},
+    {POPPLER_ANNOT_STAMP_ICON_NOT_FOR_PUBLIC_RELEASE, "NotForPublicRelease"},
+    {POPPLER_ANNOT_STAMP_ICON_SOLD, "Sold"},
+    {POPPLER_ANNOT_STAMP_ICON_TOP_SECRET, "TopSecret"},
+  };
+
+/**
+ * Return the name of a PopplerAnnotStampIcon.
+ *
+ * @param icon The PopplerAnnotStampIcon.
+ *
+ * @return Its standard PDF name, or "" if it has none.
+ */
+static const char *
+xpoppler_annot_stamp_icon_string (PopplerAnnotStampIcon icon)
+{
+  int i;
+
+  for (i = 0; i < G_N_ELEMENTS (xpoppler_annot_stamp_icons); ++i)
+    if (xpoppler_annot_stamp_icons[i].icon == icon)
+      return xpoppler_annot_stamp_icons[i].name;
+  return "";
+}
+
+/**
+ * Parse the name of a standard stamp icon.
+ *
+ * @param name The icon's name, e.g. "Approved".
+ * @param icon[out] Where to store the icon.
+ *
+ * @return TRUE, if name is a known icon.
+ */
+static gboolean
+xpoppler_annot_stamp_icon_parse (const char *name, PopplerAnnotStampIcon *icon)
+{
+  int i;
+
+  for (i = 0; i < G_N_ELEMENTS (xpoppler_annot_stamp_icons); ++i)
+    if (! strcmp (xpoppler_annot_stamp_icons[i].name, name))
+      {
+        *icon = xpoppler_annot_stamp_icons[i].icon;
+        return TRUE;
+      }
+  return FALSE;
+}
+#endif
+
 /**
  * Validate a PopplerSelectionStyle by replacing invalid styles
  * with a default of POPPLER_SELECTION_GLYPH.
@@ -1642,6 +1708,49 @@ annotation_markup_append_text_region (PopplerPage *page,
 }
 
 #endif
+
+#ifdef HAVE_POPPLER_ANNOT_SHAPES
+/* Margin around a line annotation's end points, in PDF points. */
+#define LINE_ANNOT_MARGIN 4.0
+
+/**
+ * Parse the relative end points of a line annotation.
+ *
+ * @param ctx The epdfinfo context.
+ * @param page The page of the annotation.
+ * @param arg The points as a relative "X1 Y1 X2 Y2" string.
+ * @param start[out] The start point in PDF coordinates.
+ * @param end[out] The end point in PDF coordinates.
+ * @param rect[out] The bounding box of the points, plus a small
+ *             margin and clipped to the page, in PDF coordinates.
+ * @param error_msg[out] An error message, if this fails.
+ *
+ * @return TRUE, if arg is valid.
+ */
+static gboolean
+annotation_line_parse_points (const epdfinfo_t *ctx, PopplerPage *page,
+                              const char *arg, PopplerPoint *start,
+                              PopplerPoint *end, PopplerRectangle *rect,
+                              char **error_msg)
+{
+  command_arg_t points;
+  double width, height;
+
+  if (! command_arg_parse_arg (ctx, arg, &points, ARG_EDGES, error_msg))
+    return FALSE;
+  poppler_page_get_size (page, &width, &height);
+  start->x = points.value.rectangle.x1 * width;
+  start->y = height - points.value.rectangle.y1 * height;
+  end->x = points.value.rectangle.x2 * width;
+  end->y = height - points.value.rectangle.y2 * height;
+  rect->x1 = MAX (0, MIN (start->x, end->x) - LINE_ANNOT_MARGIN);
+  rect->y1 = MAX (0, MIN (start->y, end->y) - LINE_ANNOT_MARGIN);
+  rect->x2 = MIN (width, MAX (start->x, end->x) + LINE_ANNOT_MARGIN);
+  rect->y2 = MIN (height, MAX (start->y, end->y) + LINE_ANNOT_MARGIN);
+  return TRUE;
+}
+#endif
+
 /**
  * Create a new annotation.
  *
@@ -1676,6 +1785,62 @@ annotation_new (const epdfinfo_t *ctx, document_t *doc, PopplerPage *page,
       cerror_if_not (nargs == 0, error_msg, "%s", "Too many arguments");
       return poppler_annot_text_new (doc->pdf, r);
     }
+
+#ifdef HAVE_POPPLER_ANNOT_SHAPES
+  if (! strcmp (type, "square"))
+    {
+      cerror_if_not (nargs == 0, error_msg, "%s", "Too many arguments");
+      return poppler_annot_square_new (doc->pdf, r);
+    }
+
+  if (! strcmp (type, "circle"))
+    {
+      cerror_if_not (nargs == 0, error_msg, "%s", "Too many arguments");
+      return poppler_annot_circle_new (doc->pdf, r);
+    }
+
+  if (! strcmp (type, "line"))
+    {
+      PopplerPoint start, end;
+
+      cerror_if_not (nargs <= 1, error_msg, "%s", "Too many arguments");
+      if (nargs == 1)
+        {
+          /* Start and end point as relative "X1 Y1 X2 Y2"; these
+             determine the annotation's rectangle. */
+          error_if_not (annotation_line_parse_points
+                        (ctx, page, rest->value.rest.args[0],
+                         &start, &end, r, error_msg));
+        }
+      else
+        {
+          /* From the top-left to the bottom-right corner of r. */
+          start.x = r->x1;
+          start.y = r->y2;
+          end.x = r->x2;
+          end.y = r->y1;
+        }
+      return poppler_annot_line_new (doc->pdf, r, &start, &end);
+    }
+#endif
+
+#ifdef HAVE_POPPLER_ANNOT_STAMP
+  if (! strcmp (type, "stamp"))
+    {
+      PopplerAnnotStampIcon icon = POPPLER_ANNOT_STAMP_ICON_UNKNOWN;
+      const char *name = nargs > 0 ? rest->value.rest.args[0] : "";
+
+      cerror_if_not (nargs <= 1, error_msg, "%s", "Too many arguments");
+      /* An empty name or Draft keeps poppler's default icon, Draft. */
+      cerror_if_not (! *name || ! strcmp (name, "Draft")
+                     || xpoppler_annot_stamp_icon_parse (name, &icon),
+                     error_msg, "Unknown stamp icon: %s", name);
+      a = poppler_annot_stamp_new (doc->pdf, r);
+      if (icon != POPPLER_ANNOT_STAMP_ICON_UNKNOWN)
+        poppler_annot_stamp_set_icon (POPPLER_ANNOT_STAMP (a), icon);
+      return a;
+    }
+#endif
 
 #ifdef HAVE_POPPLER_ANNOT_MARKUP
   garray = g_array_new (FALSE, FALSE, sizeof (PopplerQuadrilateral));
@@ -1754,7 +1919,15 @@ annotation_edit_validate (const epdfinfo_t *ctx, const command_arg_t *rest,
       else if (! strcmp (key, "contents"))
         atype = ARG_STRING;
       else if (! strcmp (key, "edges"))
-        atype = ARG_EDGES_OR_POSITION;
+        {
+#ifdef HAVE_POPPLER_ANNOT_SHAPES
+          /* Changing the rectangle would not move the line, which
+             poppler-glib can not read back, see `line'. */
+          cerror_if_not (! POPPLER_IS_ANNOT_LINE (annotation), error_msg,
+                         "%s", "Use the `line' property to move line annotations");
+#endif
+          atype = ARG_EDGES_OR_POSITION;
+        }
       else if (! strcmp (key, "label"))
         {
           cerror_if_not (POPPLER_IS_ANNOT_MARKUP (annotation), error_msg,
@@ -1781,10 +1954,35 @@ annotation_edit_validate (const epdfinfo_t *ctx, const command_arg_t *rest,
         }
       else if (! strcmp (key, "icon"))
         {
-          cerror_if_not (POPPLER_IS_ANNOT_TEXT (annotation), error_msg,
-                         error_fmt, key, "text");
+#ifdef HAVE_POPPLER_ANNOT_STAMP
+          if (POPPLER_IS_ANNOT_STAMP (annotation))
+            {
+              PopplerAnnotStampIcon icon;
+              cerror_if_not (xpoppler_annot_stamp_icon_parse (args[i], &icon),
+                             error_msg, "Unknown stamp icon: %s", args[i]);
+            }
+          else
+#endif
+            cerror_if_not (POPPLER_IS_ANNOT_TEXT (annotation), error_msg,
+                           error_fmt, key, "text or stamp");
           atype = ARG_STRING;
         }
+#ifdef HAVE_POPPLER_ANNOT_SHAPES
+      else if (! strcmp (key, "interior-color"))
+        {
+          cerror_if_not (POPPLER_IS_ANNOT_SQUARE (annotation)
+                         || POPPLER_IS_ANNOT_CIRCLE (annotation),
+                         error_msg, error_fmt, key, "square and circle");
+          /* An empty value removes the interior color. */
+          atype = *args[i] ? ARG_COLOR : ARG_STRING;
+        }
+      else if (! strcmp (key, "line"))
+        {
+          cerror_if_not (POPPLER_IS_ANNOT_LINE (annotation), error_msg,
+                         error_fmt, key, "line");
+          atype = ARG_EDGES;
+        }
+#endif
       else if (! strcmp (key, "is-open"))
         {
           cerror_if_not (POPPLER_IS_ANNOT_TEXT (annotation), error_msg,
@@ -1887,6 +2085,19 @@ annotation_print (const annotation_t *annot, /* const */ PopplerPage *page)
   /* >>> Markup Annotation >>> */
   if (! POPPLER_IS_ANNOT_MARKUP (a))
     {
+#ifdef HAVE_POPPLER_ANNOT_STAMP
+      /* poppler-glib does not treat stamps as markup annotations. */
+      if (POPPLER_IS_ANNOT_STAMP (a))
+        {
+          /* >>> Stamp Annotation >>> */
+          /* Stamp Icon */
+          putchar (':');
+          print_response_string (xpoppler_annot_stamp_icon_string
+                                 (poppler_annot_stamp_get_icon
+                                  (POPPLER_ANNOT_STAMP (a))), NONE);
+          /* <<< Stamp Annotation <<< */
+        }
+#endif
       putchar ('\n');
       goto theend;
     }
@@ -1956,6 +2167,26 @@ annotation_print (const annotation_t *annot, /* const */ PopplerPage *page)
       putchar (':');
       region_print (region, width, height);
       /* <<< Markup Text Annotation <<< */
+    }
+#endif
+#ifdef HAVE_POPPLER_ANNOT_SHAPES
+  else if (POPPLER_IS_ANNOT_SQUARE (a) || POPPLER_IS_ANNOT_CIRCLE (a))
+    {
+      /* >>> Square and Circle Annotation >>> */
+      /* Interior Color */
+      putchar (':');
+      if (POPPLER_IS_ANNOT_SQUARE (a))
+        color = poppler_annot_square_get_interior_color (POPPLER_ANNOT_SQUARE (a));
+      else
+        color = poppler_annot_circle_get_interior_color (POPPLER_ANNOT_CIRCLE (a));
+      if (color)
+        {
+          printf ("#%.2x%.2x%.2x", (color->red >> 8)
+                  , (color->green >> 8)
+                  , (color->blue >> 8));
+          g_free (color);
+        }
+      /* <<< Square and Circle Annotation <<< */
     }
 #endif
   putchar ('\n');
@@ -2035,9 +2266,19 @@ cmd_features (const epdfinfo_t *ctx, const command_arg_t *args)
     "no-writable-annotations",
 #endif
 #ifdef HAVE_POPPLER_ANNOT_MARKUP
-    "markup-annotations"
+    "markup-annotations",
 #else
-    "no-markup-annotations"
+    "no-markup-annotations",
+#endif
+#ifdef HAVE_POPPLER_ANNOT_SHAPES
+    "shape-annotations",
+#else
+    "no-shape-annotations",
+#endif
+#ifdef HAVE_POPPLER_ANNOT_STAMP
+    "stamp-annotations"
+#else
+    "no-stamp-annotations"
 #endif
   };
   int i;
@@ -2741,7 +2982,15 @@ cmd_pagesize(const epdfinfo_t *ctx, const command_arg_t *args)
 
    text-icon text-state
 
-   for markup text annotations.
+   for markup text annotations,
+
+   interior-color
+
+   for square and circle annotations and
+
+   stamp-icon
+
+   for stamp annotations.
 
    Errors: If page is out of range.
 */
@@ -2899,6 +3148,22 @@ cmd_getattachments (const epdfinfo_t *ctx, const command_arg_t *args)
 }
 
 #ifdef HAVE_POPPLER_ANNOT_WRITE
+
+/* Name: addannot
+   Args: filename page type selection-style edges [rest ...]
+   Returns: The new annotation, see getannots.
+
+   The meaning of rest depends on type:
+
+   highlight, squiggly, strike-out, underline: the edges of the
+   marked up text regions,
+   text, square, circle: none,
+   line: optionally the relative start and end point "X1 Y1 X2 Y2"
+   (default: from the top-left to the bottom-right corner of edges),
+   stamp: optionally a standard icon name, e.g. Approved.
+
+   Errors: If the type is not supported or the arguments are invalid.
+*/
 
 const command_arg_type_t cmd_addannot_spec[] =
   {
@@ -3131,12 +3396,55 @@ cmd_editannot (const epdfinfo_t *ctx, const command_arg_t *args)
         }
       else if (! strcmp (key, "icon"))
         {
-          PopplerAnnotText *ta = POPPLER_ANNOT_TEXT (pa);
           perror_if_not (command_arg_parse_arg  (ctx, rest_args[i], &carg,
                                                  ARG_STRING, NULL),
                          unexpected_parse_error, rest_args[i]);
-          poppler_annot_text_set_icon (ta, carg.value.string);
+#ifdef HAVE_POPPLER_ANNOT_STAMP
+          if (POPPLER_IS_ANNOT_STAMP (pa))
+            {
+              PopplerAnnotStampIcon icon;
+              perror_if_not (xpoppler_annot_stamp_icon_parse (carg.value.string,
+                                                              &icon),
+                             unexpected_parse_error, rest_args[i]);
+              poppler_annot_stamp_set_icon (POPPLER_ANNOT_STAMP (pa), icon);
+            }
+          else
+#endif
+            poppler_annot_text_set_icon (POPPLER_ANNOT_TEXT (pa),
+                                         carg.value.string);
         }
+#ifdef HAVE_POPPLER_ANNOT_SHAPES
+      else if (! strcmp (key, "interior-color"))
+        {
+          PopplerColor *color = NULL;
+
+          if (*rest_args[i])
+            {
+              perror_if_not (command_arg_parse_arg  (ctx, rest_args[i], &carg,
+                                                     ARG_COLOR, NULL),
+                             unexpected_parse_error, rest_args[i]);
+              color = &carg.value.color;
+            }
+          if (POPPLER_IS_ANNOT_SQUARE (pa))
+            poppler_annot_square_set_interior_color (POPPLER_ANNOT_SQUARE (pa),
+                                                     color);
+          else
+            poppler_annot_circle_set_interior_color (POPPLER_ANNOT_CIRCLE (pa),
+                                                     color);
+        }
+      else if (! strcmp (key, "line"))
+        {
+          PopplerPoint start, end;
+
+          perror_if_not (annotation_line_parse_points (ctx, page, rest_args[i],
+                                                       &start, &end,
+                                                       &a->amap->area, NULL),
+                         unexpected_parse_error, rest_args[i]);
+          poppler_annot_line_set_vertices (POPPLER_ANNOT_LINE (pa),
+                                           &start, &end);
+          poppler_annot_set_rectangle (pa, &a->amap->area);
+        }
+#endif
       else if (! strcmp (key, "is-open"))
         {
           PopplerAnnotText *ta = POPPLER_ANNOT_TEXT (pa);
