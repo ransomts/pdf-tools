@@ -7,6 +7,30 @@ on:
     branches: [master]
 
 jobs:
+  # Fail on any byte-compiler warning.  Pinned to one release: the
+  # snapshot obsoletes things without notice.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Emacs
+        uses: purcell/setup-emacs@master
+        with:
+          version: '31.1'
+
+      - name: Install Cask
+        uses: conao3/setup-cask@master
+        with:
+          version: 'snapshot'
+
+      - name: Install Elisp dependencies
+        run: cask install
+
+      - name: Byte-compile without warnings
+        run: make lint
+
   test-ubuntu:
     runs-on: ubuntu-latest
     strategy:

@@ -16,7 +16,7 @@ PKG=pdf-tools
 pkgname=$(PKG)-$(version)
 pkgfile=$(pkgname).tar
 
-.PHONY: all clean distclean bytecompile test check melpa
+.PHONY: all clean distclean bytecompile lint test check melpa
 
 all: $(pkgfile)
 
@@ -29,6 +29,13 @@ loaddefs: $(PKG)-autoloads.el
 # Compile the Lisp sources
 bytecompile: .cask/$(emacs_version)
 	$(CASK) exec $(emacs) --batch -L lisp -f batch-byte-compile lisp/*.el
+
+# Byte-compile the Lisp sources, failing on any warning
+lint: .cask/$(emacs_version)
+	$(CASK) exec $(emacs) --batch -L lisp \
+		--eval '(setq byte-compile-error-on-warn t)' \
+		-f batch-byte-compile lisp/*.el; \
+	status=$$?; rm -f -- lisp/*.elc; exit $$status
 
 # Clean bytecompiled sources
 byteclean:
