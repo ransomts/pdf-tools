@@ -17,6 +17,8 @@ AM_PROG_AR
 HAVE_POPPLER_FIND_OPTS="no   (requires poppler-glib >= 0.22)"
 HAVE_POPPLER_ANNOT_WRITE="no   (requires poppler-glib >= 0.19.4)"
 HAVE_POPPLER_ANNOT_MARKUP="no (requires poppler-glib >= 0.26)"
+HAVE_POPPLER_ANNOT_SHAPES="no (requires poppler-glib >= 0.26)"
+HAVE_POPPLER_ANNOT_STAMP="no (requires poppler-glib >= 22.07)"
 
 PKG_CHECK_MODULES([png], [libpng])
 PKG_CHECK_MODULES([glib], [glib-2.0])
@@ -25,6 +27,8 @@ PKG_CHECK_MODULES([poppler_glib], [poppler-glib >= 0.16.0])
 PKG_CHECK_EXISTS([poppler-glib >= 0.19.4], [HAVE_POPPLER_ANNOT_WRITE=yes])
 PKG_CHECK_EXISTS([poppler-glib >= 0.22], [HAVE_POPPLER_FIND_OPTS=yes])
 PKG_CHECK_EXISTS([poppler-glib >= 0.26], [HAVE_POPPLER_ANNOT_MARKUP=yes])
+PKG_CHECK_EXISTS([poppler-glib >= 0.26], [HAVE_POPPLER_ANNOT_SHAPES=yes])
+PKG_CHECK_EXISTS([poppler-glib >= 22.07], [HAVE_POPPLER_ANNOT_STAMP=yes])
 PKG_CHECK_MODULES([zlib], [zlib])
 
 AC_COMPILE_IFELSE(
@@ -56,6 +60,16 @@ fi
 if test "$HAVE_POPPLER_ANNOT_MARKUP" = yes; then
   AC_DEFINE([HAVE_POPPLER_ANNOT_MARKUP],1,
     [Define to 1 to enable adding of markup annotations (requires poppler-glib >= 0.26).])
+fi
+
+if test "$HAVE_POPPLER_ANNOT_SHAPES" = yes; then
+  AC_DEFINE([HAVE_POPPLER_ANNOT_SHAPES],1,
+    [Define to 1 to enable adding of square, circle and line annotations (requires poppler-glib >= 0.26).])
+fi
+
+if test "$HAVE_POPPLER_ANNOT_STAMP" = yes; then
+  AC_DEFINE([HAVE_POPPLER_ANNOT_STAMP],1,
+    [Define to 1 to enable adding of stamp annotations (requires poppler-glib >= 22.07).])
 fi
 
 AC_CANONICAL_HOST
@@ -93,4 +107,6 @@ echo
 echo "Is case-sensitive searching enabled ?     ${HAVE_POPPLER_FIND_OPTS}"
 echo "Is modifying text annotations enabled ?   ${HAVE_POPPLER_ANNOT_WRITE}"
 echo "Is modifying markup annotations enabled ? ${HAVE_POPPLER_ANNOT_MARKUP}"
+echo "Is adding shape annotations enabled ?     ${HAVE_POPPLER_ANNOT_SHAPES}"
+echo "Is adding stamp annotations enabled ?     ${HAVE_POPPLER_ANNOT_STAMP}"
 echo
