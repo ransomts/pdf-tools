@@ -1586,7 +1586,9 @@ Stores the region in `pdf-view-active-region'."
          (selection-style (or selection-style pdf-view-selection-style))
          pdf-view-continuous
          region)
-    (setq pdf-view-active-region (list page))
+    ;; Regions are per page; don't stack them across pages.
+    (unless (eql page (car pdf-view-active-region))
+      (pdf-view-deactivate-region))
     (when (pdf-util-track-mouse-dragging (event 0.05)
             (let* ((pos (event-start event))
                    (end (posn-object-x-y pos))
@@ -1652,7 +1654,9 @@ Stores the region in `pdf-view-active-region'."
                          (min margin
                               (or (nth 2 (pos-visible-in-window-p (posn-point pos) window t)) 0)))))
                     (pdf-util-scroll-to-edges iregion))))))
-      (cl-callf append (cdr pdf-view-active-region) (list region))
+      (setq pdf-view-active-region
+            (cons page (append (cdr pdf-view-active-region)
+                               (list region))))
       (pdf-view--push-mark))))
 
 (defun pdf-view-mouse-extend-region (event)
