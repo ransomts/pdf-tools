@@ -112,6 +112,13 @@ ALIST is given as alternating keys and values."
   "Return the highlight annotation of test.pdf."
   (car (pdf-annot-getannots 2 'highlight)))
 
+(defun pdf-annot-test-list-annotations ()
+  "Run `pdf-annot-list-annotations' without its context window.
+Batch Emacs before 28 has a frame too small to split for it, and
+the tests are about the list."
+  (cl-letf (((symbol-function 'tablist-display-context-window) #'ignore))
+    (pdf-annot-list-annotations)))
+
 (defun pdf-annot-test-list-rows ()
   "Return the ids of the rows of the current list buffer, in order."
   (save-excursion
@@ -920,7 +927,7 @@ t or nil signals an error."
   (pdf-annot-test-with-pdf "test.pdf"
     (pdf-annot-test-with-clean-state
       (let ((pdf-buffer (current-buffer)))
-        (pdf-annot-list-annotations)
+        (pdf-annot-test-list-annotations)
         (should (buffer-live-p pdf-annot-list-buffer))
         (should (equal (buffer-name pdf-annot-list-buffer) "*test's annots*"))
         (should (memq #'pdf-annot-list-update pdf-annot-modified-functions))
@@ -936,7 +943,7 @@ t or nil signals an error."
 (ert-deftest pdf-annot-test-list-columns ()
   (pdf-annot-test-with-pdf "test.pdf"
     (pdf-annot-test-with-clean-state
-      (pdf-annot-list-annotations)
+      (pdf-annot-test-list-annotations)
       (with-current-buffer pdf-annot-list-buffer
         (should (equal (mapcar #'car tabulated-list-format)
                        (mapcar (lambda (f)
@@ -949,7 +956,7 @@ t or nil signals an error."
 (ert-deftest pdf-annot-test-list-follows-modifications ()
   (pdf-annot-test-with-pdf "test.pdf"
     (pdf-annot-test-with-clean-state
-      (pdf-annot-list-annotations)
+      (pdf-annot-test-list-annotations)
       (cl-flet ((listed ()
                   (with-current-buffer pdf-annot-list-buffer
                     (pdf-annot-test-list-rows))))
@@ -1013,7 +1020,7 @@ t or nil signals an error."
   "The page and date columns sort numerically and chronologically."
   (pdf-annot-test-with-pdf "test.pdf"
     (pdf-annot-test-with-clean-state
-      (pdf-annot-list-annotations)
+      (pdf-annot-test-list-annotations)
       (with-current-buffer pdf-annot-list-buffer
         (let* ((entries (pdf-annot-list-entries))
                (page-sorter (nth 2 (aref tabulated-list-format 0)))
@@ -1038,7 +1045,7 @@ t or nil signals an error."
   (pdf-annot-test-with-pdf "test.pdf"
     (pdf-annot-test-with-clean-state
       (let ((pdf-annot-list-listed-types '(text link)))
-        (pdf-annot-list-annotations)
+        (pdf-annot-test-list-annotations)
         (with-current-buffer pdf-annot-list-buffer
           (should (equal tablist-current-filter '(not (== "Type" "link"))))
           (goto-char (point-min))
