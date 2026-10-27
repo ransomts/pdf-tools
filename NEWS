@@ -4,10 +4,16 @@
 - Add ~pdf-a11y-report~ to review the accessibility of tagged PDFs
   + A conformance checker like veraPDF cannot judge reading order, the heading outline or whether alt text is real. ~M-x pdf-a11y-report~ lists what a person has to check: whether the document is tagged, its language and PDF/UA claim, untagged pages, fonts that are not embedded, every figure with its alt text (flagging missing, empty, generic and file-name alt text), the headings in reading order (flagging skipped levels) and the reading order of each page (flagging content read away from its page).
   + Every entry is a button that shows the element in the PDF and highlights it where its area is known.
+- Add ~pdf-reflow~ to read a PDF's text reflowed in reading order (#359)
+  + ~M-x pdf-reflow~ in a PDF shows its text in a buffer of its own, at the current page, so it can be read in a narrow window, at any font size, with a screen reader and with the usual commands for text.
+  + For a tagged PDF the text comes from the structure tree: headings are shown as headings (scaled by level, folding with TAB in Emacs 29 or later, listed by ~imenu~), paragraphs are wrapped by ~visual-line-mode~, lists keep their labels, tables are shown as rows of cells and figures as ~[Figure: alt text]~.
+  + For a PDF that is not tagged it shows the text of each page in the order poppler reads it, joined into paragraphs, and says that this order is a guess.
+  + ~RET~ (or ~mouse-2~) on a block shows it in the PDF and highlights it; ~o~ does so without leaving the text, ~n~ and ~p~ move by block, ~M-n~ and ~M-p~ by heading, ~g~ reads the PDF again.
 
 ** API changes (for package developers)
 - New server commands ~structure~, ~fonts~ and ~xmpmetadata~, with the wrappers ~pdf-info-structure~, ~pdf-info-fonts~ and ~pdf-info-xmp-metadata~.
   + ~structure~ needs poppler-glib >= 0.26; ~pdf-info-structure-tree-p~ tells whether the server has it (feature ~structure-tree~).
+  + With its optional argument (~FULL~ in ~pdf-info-structure~), ~structure~ returns the whole text of each element for reading it, without the text of nested figures, and the numbering of list items.
 
 * Version 1.3.0
 ** New functionality to improve overall user experience
