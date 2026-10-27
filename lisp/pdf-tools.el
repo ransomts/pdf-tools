@@ -126,6 +126,7 @@ In order to customize dark and light colors use
     pdf-misc-size-indication-minor-mode
     pdf-misc-menu-bar-minor-mode
     pdf-annot-minor-mode
+    pdf-pages-minor-mode
     pdf-sync-minor-mode
     pdf-misc-context-menu-minor-mode
     pdf-cache-prefetch-minor-mode
@@ -142,6 +143,7 @@ In order to customize dark and light colors use
     pdf-misc-size-indication-minor-mode
     pdf-misc-menu-bar-minor-mode
     pdf-annot-minor-mode
+    pdf-pages-minor-mode
     pdf-sync-minor-mode
     pdf-misc-context-menu-minor-mode
     pdf-cache-prefetch-minor-mode
