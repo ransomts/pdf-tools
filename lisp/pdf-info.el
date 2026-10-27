@@ -627,7 +627,12 @@ interrupted."
                    (color . ,(not-empty color))
                    (contents . ,contents)
                    (modified . ,(pdf-info-parse-pdf-date modified))))
-        (when rest
+        (cond
+         ((eq (cdr (assoc 'type a1)) 'stamp)
+          ;; Stamps are not markup annotations as far as epdfinfo
+          ;; is concerned.
+          (setq a3 `((icon . ,(not-empty (car rest))))))
+         (rest
           (cl-destructuring-bind (label subject opacity popup-edges popup-is-open created
                                         &rest rest)
               rest
@@ -656,7 +661,9 @@ interrupted."
                           . ,(mapcar (lambda (r)
                                        (mapcar #'string-to-number
                                                (split-string r " " t)))
-                                     rest)))))))))
+                                     rest)))))
+             ((memq (cdr (assoc 'type a1)) '(square circle))
+              (setq a3 `((interior-color . ,(not-empty (car rest)))))))))))
       (append a1 a2 a3))))
 
 (defun pdf-info-query--transform-attachment (a)
@@ -1013,6 +1020,14 @@ A No-op, if BUFFER has not running server instance."
 (defun pdf-info-markup-annotations-p ()
   (not (null (memq 'markup-annotations (pdf-info-features)))))
 
+(defun pdf-info-shape-annotations-p ()
+  "Return non-nil, if square, circle and line annotations can be created."
+  (not (null (memq 'shape-annotations (pdf-info-features)))))
+
+(defun pdf-info-stamp-annotations-p ()
+  "Return non-nil, if stamp annotations can be created."
+  (not (null (memq 'stamp-annotations (pdf-info-features)))))
+
 (defmacro pdf-info-assert-writable-annotations ()
   `(unless (memq 'writable-annotations (pdf-info-features))
      (error "Writing annotations is not supported by this version of epdfinfo")))
@@ -1021,12 +1036,26 @@ A No-op, if BUFFER has not running server instance."
   `(unless (memq 'markup-annotations (pdf-info-features))
      (error "Creating markup annotations is not supported by this version of epdfinfo")))
 
+(defconst pdf-info-standard-stamp-icons
+  '("Approved" "AsIs" "Confidential" "Departmental" "Draft"
+    "Experimental" "Expired" "Final" "ForComment" "ForPublicRelease"
+    "NotApproved" "NotForPublicRelease" "Sold" "TopSecret")
+  "The standard icons of stamp annotations.
+
+Draft is the default icon of a new stamp.  It can only be chosen
+when creating a stamp, not set afterwards.")
+
 (defun pdf-info-creatable-annotation-types ()
+  "Return the list of annotation types epdfinfo is able to create."
   (let ((features (pdf-info-features)))
     (cond
      ((not (memq 'writable-annotations features)) nil)
      ((memq 'markup-annotations features)
-      (list 'text 'squiggly 'underline 'strike-out 'highlight))
+      (append (list 'text 'squiggly 'underline 'strike-out 'highlight)
+              (and (memq 'shape-annotations features)
+                   (list 'square 'circle 'line))
+              (and (memq 'stamp-annotations features)
+                   (list 'stamp))))
      (t (list 'text)))))
 
 (defun pdf-info-open (&optional file-or-buffer password)
@@ -1413,7 +1442,16 @@ If the annotation is also a markup text annotation, the alist
 contains the following keys.
 
 text-icon  - A string describing the purpose of this annotation.
-text-state - A string, e.g. accepted or rejected." ;FIXME: Use symbols ?
+text-state - A string, e.g. accepted or rejected.
+
+Square and circle annotations have an additional key
+
+interior-color - The color it is filled with, or nil.
+
+and stamp annotations
+
+icon - The name of its standard icon, e.g. \"Approved\", or nil for
+       a Draft or custom stamp.  Stamps have no markup keys." ;FIXME: Use symbols ?
 
   (let ((pages (pdf-info-normalize-page-range pages)))
     (pdf-info-query
@@ -1443,6 +1481,16 @@ function."
 
 FIXME: TYPE may be one of `text', `markup-highlight', ... .
 FIXME: -1 = 24
+
+MARKUP-EDGES depend on TYPE: For markup annotations, like
+`highlight', these are the edges of the marked up text regions.
+For a `line' it may be a single list \(X1 Y1 X2 Y2\) of its
+start and end point, which then also determines its edges;
+otherwise the line goes from the top-left to the bottom-right
+corner of EDGES.  For a `stamp' it may be a single string naming
+one of `pdf-info-standard-stamp-icons'.  Other types take no
+MARKUP-EDGES.
+
 See `pdf-info-getannots' for the kind of value of this function
 returns."
   (pdf-info-assert-writable-annotations)
@@ -1458,7 +1506,9 @@ returns."
    (pdf-info--selection-style selection-style)
    (mapconcat 'number-to-string edges " ")
    (mapcar (lambda (me)
-             (mapconcat 'number-to-string me " "))
+             (if (stringp me)
+                 me
+               (mapconcat 'number-to-string me " ")))
            markup-edges)))
 
 (defun pdf-info-delannot (id &optional file-or-buffer)
@@ -1492,6 +1542,11 @@ ID should be a symbol, which was previously returned in a
 `pdf-info-getannots' query.
 
 MODIFICATIONS is an alist of properties and their new values.
+Besides the common properties like `color', `contents' and
+`edges', square and circle annotations accept `interior-color'
+\(nil removes it\), line annotations `line', a list \(X1 Y1 X2
+Y2\) of new start and end points, and stamp annotations `icon',
+one of `pdf-info-standard-stamp-icons' except \"Draft\".
 
 The server must support modifying annotations for this to work."
 
@@ -1503,7 +1558,10 @@ The server must support modifying annotations for this to work."
               (color
                (list (car elt)
                      (pdf-util-hexcolor (cdr elt))))
-              (edges
+              (interior-color
+               (list (car elt)
+                     (if (cdr elt) (pdf-util-hexcolor (cdr elt)) "")))
+              ((edges line)
                (list (car elt)
                      (mapconcat 'number-to-string (cdr elt) " ")))
               ((popup-is-open is-open)
