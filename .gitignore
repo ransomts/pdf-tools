@@ -16,3 +16,4 @@ test/test.upb
 /pdf-tools-autoloads.el
 /pdf-tools-pkg.el
 dev_tools/reviews
+/asan-logs/
