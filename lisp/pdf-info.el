@@ -591,6 +591,17 @@ interrupted."
            (push key options)))
        options))
     (pagelabels (mapcar #'car response))
+    ((layers setlayer ocgstate)
+     (mapcar (lambda (r)
+               (cl-destructuring-bind (depth id visible group title) r
+                 `((depth . ,(string-to-number depth))
+                   (id . ,(let ((id (string-to-number id)))
+                            (and (> id 0) id)))
+                   (visible . ,(equal visible "1"))
+                   (radio-group . ,(let ((group (string-to-number group)))
+                                     (and (> group 0) group)))
+                   (title . ,title))))
+             response))
     (ping (caar response))
     (t response)))
 
@@ -610,6 +621,10 @@ interrupted."
              (page . ,(string-to-number (pop action)))
              (top . ,(and (> (length (car action)) 0)
                           (string-to-number (pop action))))))
+          (ocg-state
+           `((description . ,(pop action))
+             (page . ,(string-to-number (pop action)))
+             (index . ,(string-to-number (pop action)))))
           (t `((uri . ,(pop action))))))))
 
 (defun pdf-info-query--transform-annotation (a)
@@ -1013,6 +1028,10 @@ A No-op, if BUFFER has not running server instance."
 (defun pdf-info-markup-annotations-p ()
   (not (null (memq 'markup-annotations (pdf-info-features)))))
 
+(defun pdf-info-layers-p ()
+  "Return non-nil if the server can show and hide layers."
+  (not (null (memq 'layers (pdf-info-features)))))
+
 (defmacro pdf-info-assert-writable-annotations ()
   `(unless (memq 'writable-annotations (pdf-info-features))
      (error "Writing annotations is not supported by this version of epdfinfo")))
@@ -1236,6 +1255,11 @@ goto-dest, with an additional FILENAME of the external PDF.
 
 uri -- A link in form of some URI. Alist contains additional key
 URI.
+
+ocg-state -- A link showing, hiding or toggling layers (optional
+content groups).  Alist contains additional keys DESCRIPTION, a
+string saying which layers it changes, and PAGE and INDEX, which
+identify the link for `pdf-info-ocgstate'.
 
 In the first two cases, PAGE may be 0 and TOP nil, which means
 these data is unspecified."
@@ -1768,6 +1792,64 @@ pages in FILE-OR-BUFFER."
   (pdf-info-query
    'pagelabels
    (pdf-info--normalize-file-or-buffer file-or-buffer)))
+
+(defun pdf-info-layers (&optional file-or-buffer)
+  "Return the layers (optional content groups) of FILE-OR-BUFFER.
+
+The layers are returned as a flattened tree, in the order of the
+document's layer panel.  Each element is an alist with the
+following keys.
+
+DEPTH -- The level of the element in the tree, starting at 1.
+An element's children follow it with a larger depth.
+
+ID -- The number of the layer, for `pdf-info-setlayer', or nil if
+the element is only a label grouping its children.
+
+VISIBLE -- Non-nil if the layer is currently shown.
+
+RADIO-GROUP -- A number shared by all layers of a radio button
+group, of which at most one is shown at a time, or nil.
+
+TITLE -- The name of the layer or label.
+
+The list is empty if the document has no layers.  Visibility is
+state of the document opened by the server, not of the file: it
+is never saved and it is reset when the document is closed, e.g.
+by reverting its buffer."
+  (pdf-info-query
+   'layers
+   (pdf-info--normalize-file-or-buffer file-or-buffer)))
+
+(defun pdf-info-setlayer (id visible &optional file-or-buffer)
+  "Show or hide the layer ID of document FILE-OR-BUFFER.
+
+ID is a layer's number, as returned by `pdf-info-layers'.  Show
+the layer if VISIBLE is non-nil, and hide it otherwise.  Showing a
+layer of a radio button group hides the others of its group.
+
+Return the document's layers like `pdf-info-layers' does."
+  (cl-check-type id natnum)
+  (pdf-info-query
+   'setlayer
+   (pdf-info--normalize-file-or-buffer file-or-buffer)
+   id
+   (if visible 1 0)))
+
+(defun pdf-info-ocgstate (page index &optional file-or-buffer)
+  "Perform the action of an `ocg-state' link of FILE-OR-BUFFER.
+
+PAGE and INDEX identify the link and are the values of the keys
+of the same name of a link returned by `pdf-info-pagelinks'.
+
+Return the document's layers like `pdf-info-layers' does."
+  (cl-check-type page natnum)
+  (cl-check-type index natnum)
+  (pdf-info-query
+   'ocgstate
+   (pdf-info--normalize-file-or-buffer file-or-buffer)
+   page
+   index))
 
 (defun pdf-info-ping (&optional message)
   "Ping the server using MESSAGE.
