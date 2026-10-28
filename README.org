@@ -31,6 +31,8 @@ The ~pdf-tools~ Wiki is maintained at https://pdftools.wiki. Head to the site if
     - [[#keybindings-for-working-with-annotations][Keybindings for working with Annotations]]
   - [[#page-operations][Page operations]]
     - [[#keybindings-for-page-operations][Keybindings for page operations]]
+  - [[#page-thumbnails][Page thumbnails]]
+    - [[#keybindings-for-page-thumbnails][Keybindings for page thumbnails]]
   - [[#working-with-auctex][Working with AUCTeX]]
     - [[#keybindings-for-working-with-auctex][Keybindings for working with AUCTeX]]
   - [[#miscellaneous-features][Miscellaneous features]]
@@ -237,6 +239,7 @@ This also applies when updating via MELPA / NonGNU ELPA (except for running the 
 + SyncTeX :: Jump from a position on a page directly to the TeX source and vice versa.
 + Virtual :: Use a collection of documents as if it were one, big single PDF.
 + Pages :: Delete, extract, move and rotate pages, and insert pages of other PDFs, changing the file itself (needs the =qpdf= program). [[id:7740dc50-5c1c-4d94-b896-264066d06efa][More information here]].
++ Thumbnails :: Show the pages as a grid of thumbnails (=M-x pdf-thumbs= or ~T~) to find a page at a glance, and mark pages there to delete, extract, move or rotate them. [[id:8eb69b29-1f57-4c27-8d26-77aaea39bb71][More information here]].
 + Misc ::
   - Display PDF's metadata.
   - Mark a region and kill the text from the PDF.
@@ -406,6 +409,40 @@ The commands work on the current page. A numeric prefix argument /N/ selects /N/
 
 The prefix is ~pdf-pages-minor-mode-map-prefix~.
 
+** Page thumbnails
+:PROPERTIES:
+:ID:       8eb69b29-1f57-4c27-8d26-77aaea39bb71
+:END:
+~T~ (~pdf-thumbs~) shows the pages of the PDF as a grid of thumbnails in a window of its own, each labelled with its page label. The grid reflows when the window changes width, and the PDF's current page is highlighted. ~RET~ or a click on a thumbnail shows that page in the PDF window.
+
+The thumbnails are rendered in the background, those in view first and the others while Emacs is idle, so a long document opens at once. They follow the PDF's colors, e.g. ~pdf-view-midnight-minor-mode~. ~pdf-thumbs-size~ is their default width in pixels.
+
+Pages can be marked as files in Dired. The page operations (see [[id:7740dc50-5c1c-4d94-b896-264066d06efa][Page operations]], they need =qpdf=) work on the marked pages, or else on the page at point, and the grid follows the changed file.
+
+*** Keybindings for page thumbnails
+:PROPERTIES:
+:ID:       da002b9b-54e4-4373-8848-cbeb66829225
+:END:
+| Page thumbnails                            |                                           |
+|--------------------------------------------+-------------------------------------------|
+| Show the thumbnail grid (in a PDF buffer)  | ~T~                                       |
+| Move between thumbnails                    | arrow keys, ~n~ ~p~ ~f~ ~b~, ~C-n~ ~C-p~  |
+| First / last / current page                | ~<~ / ~>~ / ~.~                           |
+| Show the page and select the PDF window    | ~RET~                                     |
+| Show the page and stay in the grid         | ~SPC~, ~mouse-1~                          |
+| Mark / unmark / unmark all                 | ~m~ / ~u~ / ~U~                           |
+| Toggle marks                               | ~t~                                       |
+| Delete marked page(s)                      | ~D~                                       |
+| Extract marked page(s) to a new file       | ~X~                                       |
+| Move marked page(s) to a position          | ~M~                                       |
+| Rotate marked page(s) clockwise / counter  | ~R~ / ~L~                                 |
+| Undo the last page operation               | ~C-/~                                     |
+| Larger / smaller / default size thumbnails | ~+~ / ~-~ / ~0~                           |
+| Refresh                                    | ~g~                                       |
+| Quit                                       | ~q~                                       |
+
+Without marks, the page operations work on the page at point.
+
 ** Working with AUCTeX
 :PROPERTIES:
 :CREATED:  [2021-12-30 Thu 18:37]
@@ -541,6 +578,7 @@ Note that this overwrites the PDF file visited in the buffer from which it is ru
 - [[brain-child:243b3843-b912-430b-884a-641304755b92][Keybindings for working with Annotations]]
 - [[brain-child:73a18ea8-aa21-48d4-9d8b-dc64e3601000][Keybindings for manipulating display of PDF]]
 - [[brain-child:ac9f1f7b-63b9-4f96-8304-fd3ff15f6fc3][Keybindings for page operations]]
+- [[brain-child:da002b9b-54e4-4373-8848-cbeb66829225][Keybindings for page thumbnails]]
 - [[brain-child:ab7872c1-edd6-465d-9d1d-b621db6364a3][Keybindings for working with AUCTeX]]
 - [[brain-child:9148deff-dd5a-46be-a48f-cd2f96b7ce19][Keybindings for miscellaneous features in PDF tools]]
 
