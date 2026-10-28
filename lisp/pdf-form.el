@@ -23,6 +23,9 @@
 ;; S-TAB, or use C-c C-e to pick one of the visible fields by name.
 ;; The values are kept in the buffer until it is saved.
 ;;
+;; The fields you can interact with are marked on the page; turn the
+;; marks off and on with C-c C-s.
+;;
 ;; Clicking on a signature field, or M-x pdf-form-signatures, shows
 ;; whether its signature is valid.
 ;;
@@ -60,6 +63,24 @@ its opacity, see `pdf-info-renderpage-highlight'."
                (color :tag "Foreground")
                (number :tag "Opacity")))
 
+(defcustom pdf-form-show-fields t
+  "Whether to mark the fields you can interact with on displayed pages.
+
+Turn the marks off and on in a buffer with \\[pdf-form-show-fields];
+`pdf-form-show-fields-color' says how to mark them."
+  :group 'pdf-form
+  :type 'boolean)
+
+(defcustom pdf-form-show-fields-color '("steel blue" "steel blue" 0.15)
+  "How to mark the fields you can interact with.
+
+A list of the mark's background and foreground colors and its
+opacity, see `pdf-info-renderpage-highlight'."
+  :group 'pdf-form
+  :type '(list (color :tag "Background")
+               (color :tag "Foreground")
+               (number :tag "Opacity")))
+
 
 ;; * ================================================================== *
 ;; * Minor Mode
@@ -68,6 +89,7 @@ its opacity, see `pdf-info-renderpage-highlight'."
 (defvar pdf-form-minor-mode-map
   (let ((kmap (make-sparse-keymap)))
     (define-key kmap (kbd "C-c C-e") 'pdf-form-fill-field)
+    (define-key kmap (kbd "C-c C-s") 'pdf-form-show-fields)
     (define-key kmap (kbd "TAB") 'pdf-form-next-field)
     (define-key kmap (kbd "<backtab>") 'pdf-form-previous-field)
     kmap))
@@ -83,6 +105,9 @@ selecting one of the visible fields.  Save the buffer to keep the
 values.  Clicking on a signature field shows whether its
 signature is valid.
 
+The fields you can interact with are marked on the page;
+\\[pdf-form-show-fields] turns the marks off and on.
+
 \\{pdf-form-minor-mode-map}"
   :group 'pdf-form
   (pdf-util-assert-pdf-buffer)
@@ -92,7 +117,11 @@ signature is valid.
     (setq pdf-form-minor-mode nil)
     (message "Filling in forms is not supported by this version of epdfinfo"))
    (pdf-form-minor-mode
-    (pdf-view-add-hotspot-function 'pdf-form-hotspots-function 5))
+    (pdf-view-add-hotspot-function 'pdf-form-hotspots-function 5)
+    ;; Never removed when a buffer turns the mode off: the advice
+    ;; applies to every buffer, while `pdf-form-minor-mode' below says
+    ;; which ones mark their fields.
+    (advice-add 'pdf-view-create-page :around #'pdf-form--create-page))
    (t
     (pdf-view-remove-hotspot-function 'pdf-form-hotspots-function)))
   (pdf-view-redisplay t))
@@ -125,30 +154,96 @@ signature is valid.
   "Return the name to show for FIELD: its tooltip, else its name."
   (or (alist-get 'tooltip field) (alist-get 'name field)))
 
+(defun pdf-form--actionable-fields (page)
+  "Return the fields on PAGE you can interact with, in document order.
+
+Leave out invisible fields, e.g. most signatures, which have no
+area."
+  (cl-remove-if-not
+   (lambda (f)
+     (let ((e (alist-get 'edges f)))
+       (and (pdf-form-actionable-p f)
+            (< (nth 0 e) (nth 2 e))
+            (< (nth 1 e) (nth 3 e)))))
+   (pdf-cache-formfields page)))
+
 (defun pdf-form-hotspots-function (page size)
   "Create hotspots for the form fields on PAGE using SIZE."
   (let (hotspots)
-    (dolist (f (pdf-cache-formfields page))
-      (let ((e (pdf-util-scale (alist-get 'edges f) size 'round)))
-        ;; Invisible fields, e.g. most signatures, have no area.
-        (when (and (pdf-form-actionable-p f)
-                   (< (nth 0 e) (nth 2 e))
-                   (< (nth 1 e) (nth 3 e)))
-          (let ((id (intern (format "form-field-%d" (alist-get 'id f)))))
-            (push `((rect . ((,(nth 0 e) . ,(nth 1 e))
-                             . (,(nth 2 e) . ,(nth 3 e))))
-                    ,id
-                    (pointer hand help-echo ,(pdf-form-field-to-string f)))
-                  hotspots)
-            (local-set-key
-             (vector id 'mouse-1)
-             (lambda nil
-               (interactive "@")
-               (pdf-form-edit-field f)))
-            (local-set-key
-             (vector id t)
-             'pdf-util-image-map-mouse-event-proxy)))))
+    (dolist (f (pdf-form--actionable-fields page))
+      (let* ((e (pdf-util-scale (alist-get 'edges f) size 'round))
+             (id (intern (format "form-field-%d" (alist-get 'id f)))))
+        (push `((rect . ((,(nth 0 e) . ,(nth 1 e))
+                         . (,(nth 2 e) . ,(nth 3 e))))
+                ,id
+                (pointer hand help-echo ,(pdf-form-field-to-string f)))
+              hotspots)
+        (local-set-key
+         (vector id 'mouse-1)
+         (lambda nil
+           (interactive "@")
+           (pdf-form-edit-field f)))
+        (local-set-key
+         (vector id t)
+         'pdf-util-image-map-mouse-event-proxy)))
     (nreverse hotspots)))
+
+
+;; * ================================================================== *
+;; * Marking fields
+;; * ================================================================== *
+
+(defun pdf-form--field-edges (page)
+  "Return the edges of the fields on PAGE you can interact with."
+  (mapcar (lambda (f) (alist-get 'edges f))
+          (pdf-form--actionable-fields page)))
+
+(defun pdf-form--create-image (page size window &rest groups)
+  "Create an image of PAGE at SIZE for WINDOW, with GROUPS highlighted.
+
+SIZE is the image's size in pixel, as from `pdf-view-image-size'.
+Each of GROUPS is a list of a background and a foreground color, an
+opacity and the edges to highlight with them, see
+`pdf-info-renderpage-highlight'.  The fields on PAGE you can
+interact with are marked as well, when `pdf-form-show-fields' is
+non-nil and the page has any."
+  (let ((marks (and pdf-form-show-fields
+                    (pdf-form--field-edges page))))
+    (pdf-view-create-image
+        (apply #'pdf-cache-renderpage-highlight
+               page (car size)
+               (if marks
+                   (cons `(,@pdf-form-show-fields-color ,@marks) groups)
+                 groups))
+      :width (car size)
+      :rotation (or pdf-view--current-rotation 0)
+      :map (pdf-view-apply-hotspot-functions window page size)
+      :pointer 'arrow)))
+
+(defun pdf-form--create-page (create-page page &optional window)
+  "CREATE-PAGE is `pdf-view-create-page', applied to PAGE and WINDOW.
+
+Mark the fields on PAGE you can interact with first, when
+`pdf-form-minor-mode' and `pdf-form-show-fields' are non-nil."
+  (if (not (and pdf-form-minor-mode pdf-form-show-fields))
+      (funcall create-page page window)
+    (if (not (pdf-form--field-edges page))
+        (funcall create-page page window)
+      (let ((size (pdf-view-desired-image-size page window)))
+        (pdf-form--create-image page size window)))))
+
+(defun pdf-form-show-fields (&optional arg)
+  "Toggle marking the fields you can interact with on displayed pages.
+
+With a prefix argument, turn the marks on when it is positive and
+off otherwise.  See `pdf-form-show-fields' for what the marks are."
+  (interactive (list current-prefix-arg))
+  (pdf-util-assert-pdf-buffer)
+  (setq-local pdf-form-show-fields
+              (if (null arg)
+                  (not pdf-form-show-fields)
+                (> (prefix-numeric-value arg) 0)))
+  (pdf-view-redisplay t))
 
 
 ;; * ================================================================== *
@@ -272,14 +367,9 @@ signature is valid.
       (let ((size (pdf-view-image-size))
             (edges (alist-get 'edges field)))
         (pdf-view-display-image
-         (pdf-view-create-image
-             (pdf-cache-renderpage-highlight
-              page (car size)
-              `(,@pdf-form-highlight-color ,edges))
-           :map (pdf-view-apply-hotspot-functions
-                 (selected-window) page size)
-           :width (car size))
-         (when pdf-view-roll-minor-mode page))
+          (pdf-form--create-image page size (selected-window)
+                                  `(,@pdf-form-highlight-color ,edges))
+          (when pdf-view-roll-minor-mode page))
         (pdf-util-scroll-to-edges
          (pdf-util-scale-relative-to-pixel edges))))))
 

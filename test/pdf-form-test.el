@@ -122,6 +122,109 @@
         (should (equal (pdf-form-read-value (pdf-form-test-field "pet" fields))
                        "Ferret"))))))
 
+(ert-deftest pdf-form-actionable-fields ()
+  (pdf-test-with-pdf "forms.pdf"
+    ;; `fixed' is read-only, the other twelve fields can be used.
+    (should (equal (mapcar (lambda (f) (alist-get 'name f))
+                            (pdf-form--actionable-fields 1))
+                   '("name" "notes" "secret" "agree" "color" "size"
+                     "fruit" "pet" "tags" "zip" "Reset" "size")))))
+
+(defun pdf-form-test-image-data (image)
+  "Return the data of the IMAGE created by `pdf-view-create-page'."
+  (plist-get (cdr image) :data))
+
+(defmacro pdf-form-test-with-images (&rest body)
+  "Run BODY so that page images can be created without PNG support.
+
+These tests only compare the image data, and the Emacs builds CI
+uses cannot create PNG images: `pdf-view-image-type' signals an
+error, and so would `create-image'."
+  (declare (indent 0) (debug t))
+  `(cl-letf (((symbol-function 'pdf-view-image-type)
+              (lambda () 'png))
+             ((symbol-function 'create-image)
+              (lambda (data &optional type _data-p &rest props)
+                `(image :type ,type :data ,data ,@props))))
+     ,@body))
+
+(ert-deftest pdf-form-create-page-marks-fields ()
+  (pdf-form-test-with-images
+    (pdf-test-with-pdf "forms.pdf"
+      (let* ((pdf-view-inhibit-hotspots t)
+             (size (pdf-view-desired-image-size 1)))
+        (should pdf-form-show-fields)
+        ;; With marks on, the page shows the highlighted fields.
+        (should (equal (pdf-form-test-image-data (pdf-view-create-page 1))
+                       (apply #'pdf-cache-renderpage-highlight 1 (car size)
+                              (list `(,@pdf-form-show-fields-color
+                                      ,@(pdf-form--field-edges 1))))))
+        ;; With marks off, it is the plain rendering.
+        (let ((pdf-form-show-fields nil))
+          (should (equal (pdf-form-test-image-data (pdf-view-create-page 1))
+                         (pdf-cache-renderpage 1 (car size)))))))))
+
+(ert-deftest pdf-form-create-page-marks-no-fields ()
+  (pdf-form-test-with-images
+    (pdf-test-with-test-pdf-view
+      ;; A document without fields is rendered as before.
+      (let* ((pdf-view-inhibit-hotspots t)
+             (size (pdf-view-desired-image-size 1)))
+        (should (equal (pdf-form-test-image-data (pdf-view-create-page 1))
+                       (pdf-cache-renderpage 1 (car size))))))))
+
+(ert-deftest pdf-form-show-field-shows-marks-too ()
+  (pdf-form-test-with-images
+    (pdf-test-with-pdf "forms.pdf"
+      (let* ((pdf-view-inhibit-hotspots t)
+             (size (pdf-view-desired-image-size 1))
+             (field (pdf-form-test-field "name"))
+             (image (pdf-form--create-image 1 size nil
+                                            `(,@pdf-form-highlight-color
+                                              ,(alist-get 'edges field)))))
+        (should (equal (pdf-form-test-image-data image)
+                       (apply #'pdf-cache-renderpage-highlight 1 (car size)
+                              (list `(,@pdf-form-show-fields-color
+                                      ,@(pdf-form--field-edges 1))
+                                    `(,@pdf-form-highlight-color
+                                      ,(alist-get 'edges field))))))))))
+
+(ert-deftest pdf-form-show-fields-toggle ()
+  (pdf-form-test-with-images
+    (pdf-test-with-pdf "forms.pdf"
+      (let* ((pdf-view-inhibit-hotspots t)
+             (width (car (pdf-view-desired-image-size 1))))
+        (should pdf-form-show-fields)
+        (pdf-form-show-fields)
+        (should-not pdf-form-show-fields)
+        ;; Marks follow the variable.
+        (should (equal (pdf-form-test-image-data (pdf-view-create-page 1))
+                       (pdf-cache-renderpage 1 width)))
+        (pdf-form-show-fields)
+        (should pdf-form-show-fields)
+        (should-not (equal (pdf-form-test-image-data (pdf-view-create-page 1))
+                           (pdf-cache-renderpage 1 width)))
+        (pdf-form-show-fields 0)
+        (should-not pdf-form-show-fields)
+        (pdf-form-show-fields 1)
+        (should pdf-form-show-fields)))))
+
+(ert-deftest pdf-form-create-page-gated-by-mode ()
+  (pdf-form-test-with-images
+    (pdf-test-with-pdf "forms.pdf"
+      (let* ((pdf-view-inhibit-hotspots t)
+             (width (car (pdf-view-desired-image-size 1))))
+        ;; The advice stays installed, but a buffer with the mode off
+        ;; shows the plain rendering.
+        (pdf-form-minor-mode -1)
+        (should (advice-member-p 'pdf-form--create-page 'pdf-view-create-page))
+        (should-not pdf-form-minor-mode)
+        (let ((pdf-form-show-fields t))
+          (should (equal (pdf-form-test-image-data (pdf-view-create-page 1))
+                         (pdf-cache-renderpage 1 width))))
+        (pdf-form-minor-mode 1)
+        (should pdf-form-minor-mode)))))
+
 (ert-deftest pdf-form-next-field ()
   (pdf-test-with-pdf "forms.pdf"
     (let (visited)
