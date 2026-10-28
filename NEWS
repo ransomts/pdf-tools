@@ -16,6 +16,10 @@
   + Works on the current page, /N/ pages with a numeric prefix argument, or a qpdf page range such as =3-5,8,10-z= with ~C-u~.
   + Uses the =qpdf= program (8.4 or later), see ~pdf-pages-qpdf-program~.
   + Refuses to touch a buffer with unsaved changes, replaces the file only after qpdf succeeded, and keeps previous versions for ~pdf-pages-undo~ (~C-c C-o u~).
+- Add ~pdf-thumbs~ (~T~), a grid of page thumbnails
+  + The grid reflows to the window width, labels each thumbnail with its page label, and highlights the current page. ~RET~ or a click shows a page.
+  + Thumbnails render asynchronously, those in view first, so long documents open at once. They follow ~pdf-view-midnight-minor-mode~.
+  + Mark pages with ~m~, ~u~, ~U~ as in Dired, then delete (~D~), extract (~X~), move (~M~) or rotate (~R~ / ~L~) them with the operations of ~pdf-pages-minor-mode~.
 - Add ~pdf-a11y-report~ to review the accessibility of tagged PDFs
   + A conformance checker like veraPDF cannot judge reading order, the heading outline or whether alt text is real. ~M-x pdf-a11y-report~ lists what a person has to check: whether the document is tagged, its language and PDF/UA claim, untagged pages, fonts that are not embedded, every figure with its alt text (flagging missing, empty, generic and file-name alt text), the headings in reading order (flagging skipped levels) and the reading order of each page (flagging content read away from its page).
   + Every entry is a button that shows the element in the PDF and highlights it where its area is known.

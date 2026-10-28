@@ -195,6 +195,35 @@ and \\[universal-argument] reads a page range with PROMPT."
           (number-sequence (max 1 (+ current n 1)) current))))
      (t (list current)))))
 
+(defun pdf-pages-read-position (pages)
+  "Read the position to which `pdf-pages-move' should move PAGES."
+  (read-number (format "Move %s to position (1-%d): "
+                       (pdf-pages--describe pages)
+                       (- (pdf-cache-number-of-pages)
+                          (length (delete-dups (copy-sequence pages)))
+                          -1))))
+
+(defun pdf-pages-read-angle ()
+  "Read the clockwise angle for `pdf-pages-rotate'."
+  (string-to-number
+   (completing-read "Rotate clockwise by degrees: "
+                    '("90" "180" "270") nil t nil nil "90")))
+
+(defun pdf-pages-read-extract-file (pages)
+  "Read the name of the file `pdf-pages-extract' should write PAGES to.
+
+The default is the visited file's name with the page range
+appended, in the same directory."
+  (let* ((source (buffer-file-name))
+         (default (expand-file-name
+                   (format "%s-p%s.pdf" (file-name-base source)
+                           (pdf-pages-range-string pages))
+                   (file-name-directory source))))
+    (read-file-name (format "Write %s to file: "
+                            (pdf-pages--describe pages))
+                    (file-name-directory default) default nil
+                    (file-name-nondirectory default))))
+
 
 
 ;; * ================================================================== *
@@ -600,13 +629,8 @@ page range.  Afterwards, show the first moved page."
   (interactive
    (progn
      (pdf-pages--prepare)
-     (let* ((pages (pdf-pages-read-pages "Move pages" current-prefix-arg))
-            (last (- (pdf-cache-number-of-pages)
-                     (length (delete-dups (copy-sequence pages)))
-                     -1)))
-       (list pages
-             (read-number (format "Move %s to position (1-%d): "
-                                  (pdf-pages--describe pages) last))))))
+     (let ((pages (pdf-pages-read-pages "Move pages" current-prefix-arg)))
+       (list pages (pdf-pages-read-position pages)))))
   (pdf-pages--assert-file)
   (let* ((npages (pdf-cache-number-of-pages))
          (pages (delete-dups (copy-sequence pages)))
@@ -639,9 +663,7 @@ prefix argument N rotates N pages starting at it, and
      (pdf-pages--prepare)
      (list (pdf-pages-read-pages "Rotate pages" current-prefix-arg)
            (if (consp current-prefix-arg)
-               (string-to-number
-                (completing-read "Rotate clockwise by degrees: "
-                                 '("90" "180" "270") nil t nil nil "90"))
+               (pdf-pages-read-angle)
              90))))
   (pdf-pages--assert-file)
   (let ((npages (pdf-cache-number-of-pages))
@@ -758,17 +780,8 @@ Return FILE's buffer."
             (pages (pdf-pages-read-pages "Extract pages"
                                          (if (and arg (not (consp arg)))
                                              arg
-                                           '(4))))
-            (source (buffer-file-name))
-            (default (expand-file-name
-                      (format "%s-p%s.pdf" (file-name-base source)
-                              (pdf-pages-range-string pages))
-                      (file-name-directory source))))
-       (list pages
-             (read-file-name (format "Write %s to file: "
-                                     (pdf-pages--describe pages))
-                             (file-name-directory default) default nil
-                             (file-name-nondirectory default))))))
+                                           '(4)))))
+       (list pages (pdf-pages-read-extract-file pages)))))
   (let* ((source (pdf-pages--assert-file t))
          (npages (pdf-cache-number-of-pages))
          (file (expand-file-name file))
