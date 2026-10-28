@@ -313,37 +313,84 @@ FONTS -- Fonts that are not embedded, see `pdf-info-fonts'."
 (defvar-local pdf-a11y--pdf-buffer nil
   "The PDF buffer a report buffer describes.")
 
-(defun pdf-a11y--search-candidates (text)
-  "Return strings to search for to locate TEXT on its page."
+(defun pdf-a11y--search-candidates (text &optional from-end)
+  "Return strings to search for to locate TEXT on its page.
+
+They are taken from the start of TEXT, or from its end if FROM-END
+is non-nil."
   (let* ((text (string-trim text))
+         (words (split-string text "[[:space:]]+" t))
+         (words (if from-end (reverse words) words))
+         (take (lambda (n)
+                 (let ((some (cl-subseq words 0 (min n (length words)))))
+                   (mapconcat #'identity (if from-end (reverse some) some)
+                              " "))))
          ;; Search at most the first few words; long text wraps over
          ;; lines and hyphenates, which page search may not match.
-         (words (split-string text "[[:space:]]+" t))
-         (short (mapconcat #'identity (cl-subseq words 0 (min 6 (length words)))
-                           " "))
+         (short (funcall take 6))
          ;; Section numbers are often laid out apart from the title.
-         (unnumbered (and (string-match "\\`[0-9.]+[[:space:]]+\\(.+\\)" short)
-                          (match-string 1 short))))
-    (delete-dups (delq nil (list short unnumbered)))))
+         (unnumbered (and (not from-end)
+                          (string-match "\\`[0-9.]+[[:space:]]+\\(.+\\)" short)
+                          (match-string 1 short)))
+         ;; Table cells are laid out apart from each other.
+         (shorter (and (> (length words) 3) (funcall take 3))))
+    (delete-dups (delq nil (list short unnumbered shorter)))))
+
+(defun pdf-a11y--search-text (text page buffer &optional from-end after)
+  "Return the edges of the first match of TEXT on PAGE of BUFFER.
+
+Search for the start of TEXT, or its end if FROM-END is non-nil,
+see `pdf-a11y--search-candidates'.  If AFTER, a relative edges
+list, is non-nil, skip matches that start before it ends."
+  (let ((case-fold-search t)
+        edges)
+    (cl-loop for candidate in (pdf-a11y--search-candidates text from-end)
+             until edges
+             do (setq edges
+                      (cl-loop for match in (ignore-errors
+                                              (pdf-info-search-string
+                                               candidate page buffer))
+                               for e = (car (alist-get 'edges match))
+                               when (or (null after)
+                                        (pdf-a11y--edges-after-p e after))
+                               return e)))
+    edges))
+
+(defun pdf-a11y--edges-after-p (edges other)
+  "Return non-nil if EDGES start after OTHER on the page.
+
+That is below it, or on the same line and to its right."
+  (pcase-let ((`(,left ,top ,_ ,bottom) edges)
+              (`(,oleft ,otop ,_ ,obottom) other))
+    (or (>= top (- obottom (* 0.25 (- obottom otop))))
+        (and (< (abs (- top otop)) (* 0.5 (- bottom top)))
+             (>= left oleft)))))
 
 (defun pdf-a11y--text-edges (element buffer)
   "Return the edges of ELEMENT's text in BUFFER as a list, or nil.
 
 This is a guess: it is the first match of the start of the
-element's text on its page."
+element's text on its page, extended as a text selection to the
+first match of the end of its text after that, if there is one."
   (let-alist element
     (unless (memq .kind pdf-a11y--illustration-kinds)
-      (let ((text (or .actual-text .text ""))
-            (case-fold-search t)
-            edges)
-        (when (>= (length (string-trim text)) 2)
-          (cl-loop for candidate in (pdf-a11y--search-candidates text)
-                   until edges
-                   do (let ((matches (ignore-errors
-                                       (pdf-info-search-string
-                                        candidate .page buffer))))
-                        (setq edges (alist-get 'edges (car matches))))))
-        edges))))
+      (let* ((text (or .actual-text .text ""))
+             (start (and (>= (length (string-trim text)) 2)
+                         (pdf-a11y--search-text text .page buffer)))
+             (end (and start
+                       (> (length (split-string text "[[:space:]]+" t)) 6)
+                       (pdf-a11y--search-text text .page buffer t start))))
+        (cond
+         ((null start) nil)
+         ((null end) (list start))
+         (t
+          (or (ignore-errors
+                (pdf-info-getselection
+                 .page
+                 (list (nth 0 start) (/ (+ (nth 1 start) (nth 3 start)) 2)
+                       (nth 2 end) (/ (+ (nth 1 end) (nth 3 end)) 2))
+                 'glyph buffer))
+              (list start))))))))
 
 (defun pdf-a11y--highlight (page edges window)
   "Highlight the list of relative EDGES on PAGE in WINDOW."
@@ -368,7 +415,7 @@ Select the PDF's window, unless NO-SELECT is non-nil."
   (let ((buffer pdf-a11y--pdf-buffer)
         window)
     (unless (buffer-live-p buffer)
-      (user-error "The PDF buffer of this report is gone"))
+      (user-error "The PDF buffer is gone"))
     (setq window (display-buffer buffer))
     (with-selected-window window
       (let-alist element
@@ -430,7 +477,7 @@ shows the element in the PDF.
 (defun pdf-a11y--revert-report (&rest _)
   "Recreate the report of the current buffer."
   (unless (buffer-live-p pdf-a11y--pdf-buffer)
-    (user-error "The PDF buffer of this report is gone"))
+    (user-error "The PDF buffer is gone"))
   (pdf-a11y--render (pdf-a11y-analyze pdf-a11y--pdf-buffer)
                     pdf-a11y--pdf-buffer))
 
