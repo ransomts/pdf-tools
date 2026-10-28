@@ -1108,7 +1108,10 @@ t or nil signals an error."
   (pdf-annot-test-with-pdf "test.pdf"
     (pdf-annot-test-with-clean-state
       (let ((a (car (pdf-annot-getannots 2 'underline))))
-        (pdf-annot-list-goto-annotation a)
+        ;; See `pdf-annot-test-list-annotations'.
+        (cl-letf (((symbol-function 'tablist-display-context-window)
+                   #'ignore))
+          (pdf-annot-list-goto-annotation a))
         (with-current-buffer pdf-annot-list-buffer
           (should (eq (tabulated-list-get-id
                        (window-point (get-buffer-window (current-buffer))))
