@@ -34,6 +34,7 @@
 (declare-function pdf-roll-page-overlay "pdf-roll")
 (declare-function pdf-roll-displayed-pages "pdf-roll")
 (declare-function image-size "image.c")
+(declare-function pdf-layers-perform-ocg-action "pdf-layers")
 ;;; Code:
 
 
@@ -176,6 +177,8 @@ links via \\[pdf-links-isearch-link].
         (if (> (length .uri) 0)
             (format "Link to uri '%s'" .uri)
           (format "Link to empty uri")))
+       (ocg-state
+        (format "Layers: %s" .description))
        (t (format "Unrecognized link type: %s" .type)))
      (if (> (length .title) 0)
          (format " (%s)" .title)))))
@@ -184,8 +187,8 @@ links via \\[pdf-links-isearch-link].
 (defun pdf-links-action-perform (link)
   "Follow LINK, depending on its type.
 
-This may turn to another page, switch to another PDF buffer or
-invoke `pdf-links-browse-uri-function'.
+This may turn to another page, switch to another PDF buffer,
+invoke `pdf-links-browse-uri-function' or show and hide layers.
 
 Interactively, link is read via `pdf-links-read-link-action'.
 This function displays characters around the links in the current
@@ -219,6 +222,9 @@ scroll the current page."
                  (pdf-util-tooltip-arrow .top)))))))
       (uri
        (funcall pdf-links-browse-uri-function .uri))
+      (ocg-state
+       (require 'pdf-layers)
+       (pdf-layers-perform-ocg-action link))
       (t
        (error "Unrecognized link type: %s" .type)))
     nil))

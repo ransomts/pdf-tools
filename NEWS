@@ -28,6 +28,10 @@
   + For a tagged PDF the text comes from the structure tree: headings are shown as headings (scaled by level, folding with TAB in Emacs 29 or later, listed by ~imenu~), paragraphs are wrapped by ~visual-line-mode~, lists keep their labels, tables are shown as rows of cells and figures as ~[Figure: alt text]~.
   + For a PDF that is not tagged it shows the text of each page in the order poppler reads it, joined into paragraphs, and says that this order is a guess.
   + ~RET~ (or ~mouse-2~) on a block shows it in the PDF and highlights it; ~o~ does so without leaving the text, ~n~ and ~p~ move by block, ~M-n~ and ~M-p~ by heading, ~g~ reads the PDF again.
+- Add ~pdf-layers~ to show and hide the layers (optional content groups) of a PDF
+  + CAD drawings, maps and some decks or exams (answers on a hidden layer) put content on layers that a viewer may show or hide. ~M-x pdf-layers~ (~C-c C-l~ in ~pdf-layers-minor-mode~, enabled by default) lists them as a tree; ~RET~, ~SPC~ or ~t~ toggles the layer at point, ~+~ and ~-~ show and hide it. Showing a layer of a radio button group hides the others of its group.
+  + Links that show, hide or toggle layers (set-OCG-state actions) now work like other links.
+  + Which layers are shown is view state: it is not saved to the file, and reverting the buffer resets it.
 - Create square, circle, line and stamp annotations #179
   + Select a region with the mouse, then ~C-c C-a r~ (square), ~C-c C-a c~ (circle), ~C-c C-a L~ (line) or ~C-c C-a S~ (stamp), or use the new "Add shape annotation" entry of the context menu.
   + A line goes from where a plain mouse drag starts to where it ends.
@@ -62,6 +66,8 @@
 - New functions ~pdf-info-shape-annotations-p~ and ~pdf-info-stamp-annotations-p~.
 - New ~pdf-view-region-selection-style~ returns the selection style to read ~pdf-view-active-region~ with
   + A double or triple click makes a region that selects by ~word~ or ~line~ regardless of ~pdf-view-selection-style~. Code that passes the region's edges to ~pdf-info-gettext~ or ~pdf-info-getselection~ should use this function instead of ~pdf-view-selection-style~; ~pdf-view-active-region-text~ and the annotation commands already do.
+- New server commands ~layers~, ~setlayer~ and ~ocgstate~, with the wrappers ~pdf-info-layers~, ~pdf-info-setlayer~ and ~pdf-info-ocgstate~; ~pdf-info-layers-p~ tells whether the server has them (feature ~layers~).
+- ~pdf-info-pagelinks~ returns links of the new type ~ocg-state~.
 
 * Version 1.3.0
 ** New functionality to improve overall user experience

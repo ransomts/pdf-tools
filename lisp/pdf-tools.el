@@ -124,6 +124,7 @@ In order to customize dark and light colors use
     pdf-form-minor-mode
     pdf-misc-minor-mode
     pdf-outline-minor-mode
+    pdf-layers-minor-mode
     pdf-misc-size-indication-minor-mode
     pdf-misc-menu-bar-minor-mode
     pdf-annot-minor-mode
@@ -143,6 +144,7 @@ In order to customize dark and light colors use
     pdf-form-minor-mode
     pdf-misc-minor-mode
     pdf-outline-minor-mode
+    pdf-layers-minor-mode
     pdf-misc-size-indication-minor-mode
     pdf-misc-menu-bar-minor-mode
     pdf-annot-minor-mode
