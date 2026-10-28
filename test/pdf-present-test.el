@@ -35,11 +35,13 @@
 
 (defun pdf-present-test--fake-setup (session _monitor)
   "Give SESSION windows in the batch frame instead of new frames."
+  ;; Split the widest windows, so that even the 10 columns of the
+  ;; batch frame before Emacs 28 leave each window two.
   (let* ((audience (split-window (selected-window) nil 'below))
          (current (split-window audience nil 'below))
          (next (split-window current nil 'right))
-         (notes (split-window next nil 'right))
-         (info (split-window notes nil 'right)))
+         (notes (split-window current nil 'right))
+         (info (split-window next nil 'right)))
     (set-window-buffer info (pdf-present--text-buffer "*pdf-present-info*"))
     (setf (pdf-present--session-audience-window session) audience
           (pdf-present--session-current-window session) current
@@ -67,13 +69,19 @@ The presentation is ended afterwards if BODY did not end it."
   `(pdf-present-test-with-deck ,pdf
      (cl-letf (((symbol-function 'pdf-view-goto-page)
                 #'pdf-present-test--fake-goto-page)
+               ;; Batch Emacs cannot display page images.
+               ((symbol-function 'pdf-view-display-page) #'ignore)
                ((symbol-function 'pdf-present--setup-display)
                 #'pdf-present-test--fake-setup)
                ((symbol-function 'pdf-present--teardown-display)
                 #'pdf-present-test--fake-teardown))
        (let ((pdf-present-notes-layout 'auto)
              (pdf-present-start-hook nil)
-             (pdf-present-quit-hook nil))
+             (pdf-present-quit-hook nil)
+             ;; Before Emacs 28 the batch frame is 10x9, too small
+             ;; for the fake layout with the default minimum sizes.
+             (window-min-height 1)
+             (window-min-width 1))
          (unwind-protect
              (progn ,@body)
            (pdf-present-quit))))))
