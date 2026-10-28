@@ -25,6 +25,7 @@ HAVE_POPPLER_FORM_RESET="no   (requires poppler-glib >= 0.90)"
 HAVE_POPPLER_SIGNING="no   (requires poppler-glib >= 23.07)"
 HAVE_POPPLER_ANNOT_FREE_TEXT="no (requires poppler-glib >= 24.12)"
 HAVE_POPPLER_ANNOT_INK="no (requires poppler-glib >= 25.06)"
+HAVE_POPPLER_METADATA_WRITE="no (requires poppler-glib >= 0.46)"
 
 PKG_CHECK_MODULES([png], [libpng])
 PKG_CHECK_MODULES([glib], [glib-2.0])
@@ -43,6 +44,7 @@ PKG_CHECK_EXISTS([poppler-glib >= 0.90], [HAVE_POPPLER_FORM_RESET=yes])
 PKG_CHECK_EXISTS([poppler-glib >= 23.07], [HAVE_POPPLER_SIGNING=yes])
 PKG_CHECK_EXISTS([poppler-glib >= 24.12], [HAVE_POPPLER_ANNOT_FREE_TEXT=yes])
 PKG_CHECK_EXISTS([poppler-glib >= 25.06], [HAVE_POPPLER_ANNOT_INK=yes])
+PKG_CHECK_EXISTS([poppler-glib >= 0.46], [HAVE_POPPLER_METADATA_WRITE=yes])
 PKG_CHECK_MODULES([zlib], [zlib])
 
 AC_COMPILE_IFELSE(
@@ -116,6 +118,11 @@ if test "$HAVE_POPPLER_ANNOT_INK" = yes; then
     [Define to 1 to enable adding of ink annotations (requires poppler-glib >= 25.06).])
 fi
 
+if test "$HAVE_POPPLER_METADATA_WRITE" = yes; then
+  AC_DEFINE([HAVE_POPPLER_METADATA_WRITE],1,
+    [Define to 1 to enable editing of document metadata (requires poppler-glib >= 0.46).])
+fi
+
 AC_CANONICAL_HOST
 # Checks for header files.
 AC_CHECK_HEADERS([stdlib.h string.h strings.h err.h])
@@ -159,4 +166,5 @@ echo "Is adding stamp annotations enabled ?     ${HAVE_POPPLER_ANNOT_STAMP}"
 echo "Is signing documents enabled ?            ${HAVE_POPPLER_SIGNING}"
 echo "Is adding free text annotations enabled ? ${HAVE_POPPLER_ANNOT_FREE_TEXT}"
 echo "Is adding ink annotations enabled ?       ${HAVE_POPPLER_ANNOT_INK}"
+echo "Is modifying document metadata enabled ?  ${HAVE_POPPLER_METADATA_WRITE}"
 echo

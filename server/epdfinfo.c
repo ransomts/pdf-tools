@@ -2591,6 +2591,11 @@ cmd_features (const epdfinfo_t *ctx, const command_arg_t *args)
 #else
     "no-markup-annotations",
 #endif
+#ifdef HAVE_POPPLER_METADATA_WRITE
+    "writable-metadata",
+#else
+    "no-writable-metadata",
+#endif
     "form-fields",
 #ifdef HAVE_POPPLER_FORM_RESET
     "form-reset",
@@ -2998,6 +3003,84 @@ cmd_metadata (const epdfinfo_t *ctx, const command_arg_t *args)
   print_response_string (time_str ? time_str : "", NEWLINE);
   OK_END ();
 }
+
+#ifdef HAVE_POPPLER_METADATA_WRITE
+
+/* Name: setmetadata
+   Args: filename key value [key value ...]
+   Returns: The document's metadata, see cmd_metadata.
+   Errors: If a key is unknown or a value is not valid UTF-8.
+
+   Valid keys are title, author, subject, keywords and creator.  An
+   empty value removes the entry from the document's information
+   dictionary.  All pairs are validated before any of them is
+   applied.
+
+   This changes the information dictionary only.  Poppler does not
+   update the XMP metadata stream, if the document has one (see
+   cmd_xmpmetadata).
+*/
+
+typedef void (*metadata_setter_t) (PopplerDocument *, const gchar *);
+
+static const struct
+{
+  const char *name;
+  metadata_setter_t setter;
+} metadata_setters[] =
+  {
+    {"title", poppler_document_set_title},
+    {"author", poppler_document_set_author},
+    {"subject", poppler_document_set_subject},
+    {"keywords", poppler_document_set_keywords},
+    {"creator", poppler_document_set_creator},
+  };
+
+const command_arg_type_t cmd_setmetadata_spec[] =
+  {
+    ARG_DOC,
+    ARG_REST                    /* key value pairs */
+  };
+
+static void
+cmd_setmetadata (const epdfinfo_t *ctx, const command_arg_t *args)
+{
+  PopplerDocument *doc = args[0].value.doc->pdf;
+  int nrest = args[1].value.rest.nargs;
+  char * const *rest = args[1].value.rest.args;
+  const size_t nsetters = G_N_ELEMENTS (metadata_setters);
+  metadata_setter_t *setters = NULL;
+  int i;
+
+  perror_if_not (nrest > 0, "Expected at least one key/value pair");
+  perror_if_not (nrest % 2 == 0, "Even number of key/value pairs expected");
+
+  setters = g_new0 (metadata_setter_t, nrest / 2);
+  for (i = 0; i < nrest; i += 2)
+    {
+      int j;
+
+      for (j = 0; j < nsetters; ++j)
+        if (! strcmp (rest[i], metadata_setters[j].name))
+          {
+            setters[i / 2] = metadata_setters[j].setter;
+            break;
+          }
+      perror_if_not (j < nsetters, "Unknown metadata key: %s", rest[i]);
+      perror_if_not (g_utf8_validate (rest[i + 1], -1, NULL),
+                     "Value of %s is not valid UTF-8", rest[i]);
+    }
+
+  for (i = 0; i < nrest; i += 2)
+    setters[i / 2] (doc, rest[i + 1]);
+
+  cmd_metadata (ctx, args);
+
+ error:
+  g_free (setters);
+}
+
+#endif  /* HAVE_POPPLER_METADATA_WRITE */
 
 /* Name: outline
    Args: filename
@@ -6263,6 +6346,9 @@ static const command_t commands [] =
     DEC_CMD (boundingbox),
     DEC_CMD (charlayout),
     DEC_CMD (pagelabels),
+#ifdef HAVE_POPPLER_METADATA_WRITE
+    DEC_CMD (setmetadata),
+#endif
 
     /* Accessibility */
 #ifdef HAVE_POPPLER_STRUCTURE

@@ -32,6 +32,12 @@
   + CAD drawings, maps and some decks or exams (answers on a hidden layer) put content on layers that a viewer may show or hide. ~M-x pdf-layers~ (~C-c C-l~ in ~pdf-layers-minor-mode~, enabled by default) lists them as a tree; ~RET~, ~SPC~ or ~t~ toggles the layer at point, ~+~ and ~-~ show and hide it. Showing a layer of a radio button group hides the others of its group.
   + Links that show, hide or toggle layers (set-OCG-state actions) now work like other links.
   + Which layers are shown is view state: it is not saved to the file, and reverting the buffer resets it.
+- Edit a PDF's metadata with ~M-x pdf-misc-edit-metadata~
+  + Lists the title, author, subject, keywords and creator in a buffer; edit them and press ~C-c C-c~ to apply or ~C-c C-k~ to cancel. ~e~ in the ~pdf-metadata-buffer-mode~ buffer (~I~) does the same, and the PDF Tools menu has an /Edit Metadata/ entry.
+  + Applying marks the PDF buffer as modified: save it to write the metadata to the file, revert it to discard the change.
+  + ~pdf-misc-set-metadata~ sets one field, ~pdf-misc-update-metadata~ several; both work from Lisp.
+  + Only the document information dictionary is changed; poppler leaves the XMP metadata stream alone. When the title changes and the document's XMP has a different ~dc:title~ (which PDF/UA and accessibility checkers read), a warning of type ~(pdf-misc xmp)~ says so. ~pdf-misc-metadata-xmp-title~ returns the XMP title.
+  + New epdfinfo command ~setmetadata~, with the Lisp wrapper ~pdf-info-setmetadata~. Writing metadata requires poppler-glib >= 0.46 and is reported as the ~writable-metadata~ feature.
 - Create square, circle, line and stamp annotations #179
   + Select a region with the mouse, then ~C-c C-a r~ (square), ~C-c C-a c~ (circle), ~C-c C-a L~ (line) or ~C-c C-a S~ (stamp), or use the new "Add shape annotation" entry of the context menu.
   + A line goes from where a plain mouse drag starts to where it ends.

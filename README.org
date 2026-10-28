@@ -248,7 +248,7 @@ This also applies when updating via MELPA / NonGNU ELPA (except for running the 
 + Present :: Give a talk from a PDF (=M-x pdf-present=): the slide alone, full screen, on the projector, and a presenter view with the next slide, speaker notes from Beamer, a timer and the clock. [[id:0c1d7f3e-5b8a-4e52-9a51-2f6c3e7d8b41][More information here]].
 + Thumbnails :: Show the pages as a grid of thumbnails (=M-x pdf-thumbs= or ~T~) to find a page at a glance, and mark pages there to delete, extract, move or rotate them. [[id:8eb69b29-1f57-4c27-8d26-77aaea39bb71][More information here]].
 + Misc ::
-  - Display PDF's metadata.
+  - Display and edit PDF's metadata (title, author, subject, keywords, creator).
   - Mark a region and kill the text from the PDF.
   - Keep track of visited pages via a history.
   - Apply a color filter for reading in low light conditions.
