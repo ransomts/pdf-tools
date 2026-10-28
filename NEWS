@@ -3,6 +3,7 @@
 ** New functionality
 - Add ~pdf-form-minor-mode~ for filling in PDF forms
   + Click on a text field, checkbox, radio button, combo box or list to change its value, move from field to field with ~TAB~ and ~S-TAB~, or press ~C-c C-e~ to pick one of the visible fields by name. Save the buffer to write the values to the file.
+  + The fields you can interact with are marked on the page, so you can see where they are: ~C-c C-s~ or the "Render Options" menu turns the marks off and on, and ~pdf-form-show-fields-color~ changes how they look.
   + Lists that allow several selections are read with ~completing-read-multiple~; editable combo boxes accept text that is not one of their items.
   + Click on a signature field, or use ~M-x pdf-form-signatures~, to see whether a signature is valid and who signed it. The certificate's revocation is not checked online. Requires poppler-glib >= 21.12.
   + Fields are shown by their tooltip, if the form gives one, rather than their internal name, and text fields refuse input longer than their limit.

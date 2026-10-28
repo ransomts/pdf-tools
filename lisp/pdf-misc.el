@@ -138,7 +138,12 @@
                         (pdf-view-midnight-minor-mode 'toggle))
       :style toggle
       :selected pdf-view-midnight-minor-mode
-      :help "Apply a color-filter appropriate for past midnight reading."])
+      :help "Apply a color-filter appropriate for past midnight reading."]
+     ["Mark Form Fields" pdf-form-show-fields
+      :style toggle
+      :selected (bound-and-true-p pdf-form-show-fields)
+      :visible (bound-and-true-p pdf-form-minor-mode)
+      :help "Mark the form fields you can interact with."])
     "--"
     ["Copy region" pdf-view-kill-ring-save
      :keys "\\[kill-ring-save]"
