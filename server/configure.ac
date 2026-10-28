@@ -23,6 +23,8 @@ HAVE_POPPLER_ANNOT_SHAPES="no (requires poppler-glib >= 0.26)"
 HAVE_POPPLER_ANNOT_STAMP="no (requires poppler-glib >= 22.07)"
 HAVE_POPPLER_FORM_RESET="no   (requires poppler-glib >= 0.90)"
 HAVE_POPPLER_SIGNING="no   (requires poppler-glib >= 23.07)"
+HAVE_POPPLER_ANNOT_FREE_TEXT="no (requires poppler-glib >= 24.12)"
+HAVE_POPPLER_ANNOT_INK="no (requires poppler-glib >= 25.06)"
 
 PKG_CHECK_MODULES([png], [libpng])
 PKG_CHECK_MODULES([glib], [glib-2.0])
@@ -39,6 +41,8 @@ PKG_CHECK_EXISTS([poppler-glib >= 0.88], [AC_DEFINE([HAVE_POPPLER_FORM_TOOLTIP],
   [Define to 1 to read form field tooltips (requires poppler-glib >= 0.88).])])
 PKG_CHECK_EXISTS([poppler-glib >= 0.90], [HAVE_POPPLER_FORM_RESET=yes])
 PKG_CHECK_EXISTS([poppler-glib >= 23.07], [HAVE_POPPLER_SIGNING=yes])
+PKG_CHECK_EXISTS([poppler-glib >= 24.12], [HAVE_POPPLER_ANNOT_FREE_TEXT=yes])
+PKG_CHECK_EXISTS([poppler-glib >= 25.06], [HAVE_POPPLER_ANNOT_INK=yes])
 PKG_CHECK_MODULES([zlib], [zlib])
 
 AC_COMPILE_IFELSE(
@@ -102,6 +106,16 @@ if test "$HAVE_POPPLER_SIGNING" = yes; then
     [Define to 1 to enable signing documents (requires poppler-glib >= 23.07).])
 fi
 
+if test "$HAVE_POPPLER_ANNOT_FREE_TEXT" = yes; then
+  AC_DEFINE([HAVE_POPPLER_ANNOT_FREE_TEXT],1,
+    [Define to 1 to enable adding of free text annotations (requires poppler-glib >= 24.12).])
+fi
+
+if test "$HAVE_POPPLER_ANNOT_INK" = yes; then
+  AC_DEFINE([HAVE_POPPLER_ANNOT_INK],1,
+    [Define to 1 to enable adding of ink annotations (requires poppler-glib >= 25.06).])
+fi
+
 AC_CANONICAL_HOST
 # Checks for header files.
 AC_CHECK_HEADERS([stdlib.h string.h strings.h err.h])
@@ -143,4 +157,6 @@ echo "Is reading the structure tree enabled ?   ${HAVE_POPPLER_STRUCTURE}"
 echo "Is adding shape annotations enabled ?     ${HAVE_POPPLER_ANNOT_SHAPES}"
 echo "Is adding stamp annotations enabled ?     ${HAVE_POPPLER_ANNOT_STAMP}"
 echo "Is signing documents enabled ?            ${HAVE_POPPLER_SIGNING}"
+echo "Is adding free text annotations enabled ? ${HAVE_POPPLER_ANNOT_FREE_TEXT}"
+echo "Is adding ink annotations enabled ?       ${HAVE_POPPLER_ANNOT_INK}"
 echo

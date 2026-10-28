@@ -91,13 +91,17 @@ Implement and describe basic org example."
     (square (color . "red"))
     (circle (color . "red"))
     (line (color . "red"))
-    (stamp (icon . "Approved")))
+    (stamp (icon . "Approved"))
+    (free-text (font-size . 12)
+               (font-color . "black"))
+    (ink (color . "red")
+         (line-width . 2)))
   "An alist of initial properties for new annotations.
 
 The alist contains a sub-alist for each of the currently available
 annotation types, i.e. text, highlight, squiggly, strike-out,
-underline, square, circle, line and stamp.  Additionally a sub-alist
-with a key of t acts as a default entry.
+underline, square, circle, line, stamp, free-text and ink.
+Additionally a sub-alist with a key of t acts as a default entry.
 
 Each of these sub-alists contain default property-values of newly
 added annotations of its respective type.
@@ -109,6 +113,13 @@ text-annotations only, icon \(one of the standard icon-types, see
 additionally have an interior-color \(a color or nil\), the fill
 color, and stamps an icon from `pdf-info-standard-stamp-icons'.
 Stamps are drawn with fixed colors and have no label.
+
+Free text annotations show their contents on the page using
+font-name \(a font family, Helvetica if unset\), font-size \(in
+points\) and font-color \(a color\); their color is the one of
+the background, which is transparent if unset.  Ink annotations
+are drawn in their color with a line-width in points, which can
+only be chosen when creating them.
 
 For example a value of
 
@@ -152,6 +163,15 @@ to \"Joe\"."
                 `(set ,label ,contents ,color ,interior-color))
                (stamp-properties
                 `(set ,contents ,stamp-icon))
+               (free-text-properties
+                `(set ,label
+                      (cons :tag "Font family" (const font-name) string)
+                      (cons :tag "Font size" (const font-size) number)
+                      (cons :tag "Text color" (const font-color) color)
+                      (cons :tag "Background color" (const color) color)))
+               (ink-properties
+                `(set ,label ,contents ,color
+                      (cons :tag "Line width" (const line-width) number)))
                (all-properties
                 `(set ,label ,contents ,color ,icon ,other)))
           `(set
@@ -164,7 +184,10 @@ to \"Joe\"."
             (cons :tag "Square Annotations" (const square) ,shape-properties)
             (cons :tag "Circle Annotations" (const circle) ,shape-properties)
             (cons :tag "Line Annotations" (const line) ,markup-properties)
-            (cons :tag "Stamp Annotations" (const stamp) ,stamp-properties))))
+            (cons :tag "Stamp Annotations" (const stamp) ,stamp-properties)
+            (cons :tag "Free Text Annotations" (const free-text)
+                  ,free-text-properties)
+            (cons :tag "Ink Annotations" (const ink) ,ink-properties))))
 
 (defcustom pdf-annot-print-annotation-functions
   '(pdf-annot-print-annotation-latex-maybe)
@@ -215,15 +238,16 @@ annoyed while reading the annotations."
   "The display action used when displaying attachments."
   :type display-buffer--action-custom-type)
 
-(defcustom pdf-annot-moveable-types '(file text stamp)
+(defcustom pdf-annot-moveable-types '(file text stamp free-text)
   "A list of annotation types, which may be moved by dragging them.
 
 Dragging with the mouse inside such an annotation moves it instead
-of selecting text.  That is why `square' and `circle', which often
-surround text, are not in this list by default.  Line annotations
-can not be moved this way."
+of selecting text.  That is why `square', `circle' and `ink', which
+often surround or cover text, are not in this list by default.
+Line annotations can not be moved this way."
   :type '(set (const file) (const text) (const square)
-              (const circle) (const stamp)))
+              (const circle) (const stamp) (const free-text)
+              (const ink)))
 
 (defconst pdf-annot-annotation-types
   '(3d caret circle file
@@ -235,7 +259,7 @@ can not be moved this way."
 (defcustom pdf-annot-list-listed-types
   (if (pdf-info-markup-annotations-p)
       (list 'text 'file 'squiggly 'highlight 'underline 'strike-out
-            'square 'circle 'line 'stamp)
+            'square 'circle 'line 'stamp 'free-text 'ink)
     (list 'text 'file))
   "A list of annotation types displayed in the list buffer."
   :type `(set ,@(mapcar (lambda (type)
@@ -350,7 +374,11 @@ Setting this after the package was loaded has no effect."
           (define-key smap "c" #'pdf-annot-add-circle-annotation)
           (define-key smap "L" #'pdf-annot-add-line-annotation))
         (when (pdf-info-stamp-annotations-p)
-          (define-key smap "S" #'pdf-annot-add-stamp-annotation))))
+          (define-key smap "S" #'pdf-annot-add-stamp-annotation))
+        (when (pdf-info-free-text-annotations-p)
+          (define-key smap "f" #'pdf-annot-add-free-text-annotation))
+        (when (pdf-info-ink-annotations-p)
+          (define-key smap "i" #'pdf-annot-add-ink-annotation))))
     kmap)
   "Keymap used for `pdf-annot-minor-mode'.")
 
@@ -424,9 +452,25 @@ Setting this after the package was loaded has no effect."
         `(menu-item "Change fill color"
                     ,(pdf-annot-create-color-submenu a 'interior-color)
                     :help "Change the color this annotation is filled with.")))
+    (when (and (eq (pdf-annot-get-type a) 'free-text)
+               (pdf-info-free-text-annotations-p))
+      (define-key menu [change-font-color]
+        `(menu-item "Change text color"
+                    ,(pdf-annot-create-color-submenu a 'font-color)
+                    :help "Change the color of this annotation's text."))
+      (define-key menu [change-font-size]
+        `(menu-item "Change font size"
+                    ,(lambda ()
+                       (interactive)
+                       (pdf-annot-put a 'font-size
+                         (read-number "Font size: "
+                                      (pdf-annot-get a 'font-size))))
+                    :help "Change the size of this annotation's text.")))
     (unless (eq (pdf-annot-get-type a) 'stamp)
       (define-key menu [change-color]
-        `(menu-item "Change color"
+        `(menu-item ,(if (eq (pdf-annot-get-type a) 'free-text)
+                         "Change background color"
+                       "Change color")
                     ,(pdf-annot-create-color-submenu a)
                     :help "Change the appearance of this annotation.")))
     (define-key menu [activate-annotation]
@@ -706,7 +750,9 @@ Annotation types are defined in `pdf-annot-markup-annotation-types'."
         (and (eq type 'line)
              (eq property 'line))
         (and (eq type 'stamp)
-             (eq property 'icon)))))
+             (eq property 'icon))
+        (and (eq type 'free-text)
+             (memq property '(font-name font-size font-color))))))
 
 (defun pdf-annot-activate-annotation (a)
   "Run handler functions on A to activate the annotation.
@@ -1120,18 +1166,20 @@ other annotations."
 
 TYPE determines the kind of annotation to add and maybe one of
 `text', `squiggly', `underline', `strike-out', `highlight',
-`square', `circle', `line' or `stamp', see
+`square', `circle', `line', `stamp', `free-text' or `ink', see
 `pdf-info-creatable-annotation-types'.
 
 EDGES determines where the annotation will appear on the page.
 If type is `text', this should be a single list of \(LEFT TOP
 RIGHT BOT\).  Though, in this case only LEFT and TOP are used,
 since the size of text annotations is fixed.  For `square',
-`circle' and `stamp' it should be a single such list as well.
-For `line' it should be a single list \(X1 Y1 X2 Y2\) of the
-start and end point of the line.  Otherwise EDGES may be a list
-of such elements.  All values should be image relative
-coordinates, i.e. in the range \[0;1\].
+`circle', `stamp' and `free-text' it should be a single such list
+as well.  For `line' it should be a single list \(X1 Y1 X2 Y2\)
+of the start and end point of the line.  For `ink' it should be
+a list of strokes, each a list \(X1 Y1 X2 Y2 ...\) of the points
+the pen went through.  Otherwise EDGES may be a list of such
+elements.  All values should be image relative coordinates,
+i.e. in the range \[0;1\].
 
 PROPERTY-ALIST is a list of annotation properties, which will be
 put on the created annotation.
@@ -1157,12 +1205,12 @@ Return the new annotation."
     (setq page (pdf-view-current-page)))
   (unless (consp (car-safe edges))
     (setq edges (list edges)))
-  (when (and (memq type '(text square circle line stamp))
+  (when (and (memq type '(text square circle line stamp free-text))
              (> (length edges) 1))
     (error "Edges argument should be a single edge-list for %s annotations"
            type))
   (let* ((selection-style (pdf-view-region-selection-style))
-         (shape-p (memq type '(square circle line stamp)))
+         (shape-p (memq type '(square circle line stamp free-text ink)))
          (non-markup (pcase type
                        ('text t)
                        ('highlight pdf-view--have-rectangle-region)
@@ -1177,6 +1225,15 @@ Return the new annotation."
                (setq property-alist (assq-delete-all
                                      'icon (copy-sequence property-alist)))
                (and icon (list icon))))
+            ;; The strokes, preceded by their width, which can not
+            ;; be changed later.
+            ('ink
+             (let ((width (cdr (assq 'line-width property-alist))))
+               (setq property-alist (assq-delete-all
+                                     'line-width (copy-sequence property-alist)))
+               (if width
+                   (cons (number-to-string width) edges)
+                 edges)))
             (_ (unless non-markup edges))))
          (a (apply #'pdf-info-addannot
                    page
@@ -1186,6 +1243,9 @@ Return the new annotation."
                      (cl-destructuring-bind (x1 y1 x2 y2) (car edges)
                        (list (min x1 x2) (min y1 y2)
                              (max x1 x2) (max y1 y2))))
+                    ((eq type 'ink)
+                     ;; The server derives the edges from the strokes.
+                     '(0 0 1 1))
                     (non-markup
                      (car edges))
                     (t
@@ -1369,18 +1429,21 @@ properties. See also `pdf-annot-add-markup-annotation'."
   "Merge ALISTS and the defaults for new annotations of TYPE.
 
 Drop properties, which annotations of TYPE do not have, e.g. the
-default label for stamps."
+default label for stamps.  Keep the `line-width' of ink
+annotations, which is set when creating them."
   (let ((dummy `((type . ,type))))
     (cl-remove-if-not
      (lambda (elt)
-       (pdf-annot-property-modifiable-p dummy (car elt)))
+       (or (pdf-annot-property-modifiable-p dummy (car elt))
+           (and (eq type 'ink) (eq (car elt) 'line-width))))
      (apply #'pdf-annot-merge-alists
             (append
              alists
              (list (cdr (assq type pdf-annot-default-annotation-properties))
                    (cdr (assq t pdf-annot-default-annotation-properties)))
-             ;; Stamps are drawn in fixed colors.
-             (unless (eq type 'stamp)
+             ;; Stamps are drawn in fixed colors, and the color of
+             ;; free text is its background, transparent by default.
+             (unless (memq type '(stamp free-text))
                (list (when pdf-annot-color-history
                        `((color . ,(car pdf-annot-color-history))))
                      '((color . "#ff0000")))))))))
@@ -1502,6 +1565,235 @@ Return the new annotation."
     'stamp (and icon `((icon . ,icon))) property-alist)
    (car region)))
 
+(defun pdf-annot--assert-creatable (type)
+  "Signal an error, if epdfinfo can not create annotations of TYPE."
+  (unless (memq type (pdf-info-creatable-annotation-types))
+    (error "Creating %s annotations is not supported by this version of epdfinfo%s"
+           type
+           (pcase type
+             ('free-text " (requires poppler-glib >= 24.12)")
+             ('ink " (requires poppler-glib >= 25.06)")
+             (_ "")))))
+
+(defun pdf-annot--posn-page (posn)
+  "Return the page of image position POSN."
+  (if pdf-view-roll-minor-mode
+      (/ (+ 3 (posn-point posn)) 4)
+    (pdf-view-current-page (posn-window posn))))
+
+(defun pdf-annot--free-text-size (text font-size)
+  "Return the approximate size of TEXT in points as a cons \(WIDTH . HEIGHT\).
+
+TEXT is drawn with a font of FONT-SIZE points."
+  (let ((lines (split-string text "\n")))
+    (cons (+ 4 (* 0.6 font-size
+                  (apply #'max 1 (mapcar #'string-width lines))))
+          (+ 4 (* 1.25 font-size (length lines))))))
+
+(defun pdf-annot-add-free-text-annotation (where text &optional color
+                                                 property-alist)
+  "Add a new free text annotation showing TEXT in the selected window.
+
+WHERE determines the area of the annotation.  It is either a
+region, i.e. a cons \(PAGE . LIST-OF-EDGES\) as returned by
+`pdf-view-active-region', whose bounding box the text fills, or a
+position, i.e. an image position object or a cons \(X . Y\) of
+image coordinates, where the text starts; then the annotation is
+made large enough for TEXT.  The text is wrapped at the right
+edge of the annotation and cut off at the bottom.  Interactively,
+use the active region, if there is one, otherwise read a position
+with the mouse, and read TEXT in the minibuffer.
+
+COLOR is the color of the text.  Merge it as a font-color
+property with PROPERTY-ALIST and
+`pdf-annot-default-annotation-properties' and apply the result to
+the created annotation.  Its font-name and font-size properties
+determine the font and its color property the background, which
+is transparent if unset.
+
+TEXT is the contents of the annotation, so it may be changed
+afterwards with `pdf-annot-edit-contents'.
+
+See also `pdf-annot-add-annotation'.
+
+Return the new annotation."
+  (interactive
+   (progn
+     (pdf-annot--assert-creatable 'free-text)
+     (list (if (pdf-view-active-region-p)
+               (pdf-view-active-region t)
+             (let ((posn (pdf-util-read-image-position
+                          "Click where the text should start ...")))
+               (select-window (posn-window posn))
+               posn))
+           (read-string "Text: "))))
+  (pdf-util-assert-pdf-window)
+  (pdf-annot--assert-creatable 'free-text)
+  (when (equal text "")
+    (user-error "No text given"))
+  (let ((properties (pdf-annot--shape-properties
+                     'free-text
+                     `((contents . ,text))
+                     (and color `((font-color . ,color)))
+                     property-alist))
+        page edges)
+    (cond
+     ((and (consp where) (natnump (car where))
+           (consp (cdr where)) (consp (cadr where)))
+      (setq page (car where)
+            edges (pdf-annot--region-rectangle where)))
+     (t
+      (when (posnp where)
+        (setq page (pdf-annot--posn-page where)
+              where (posn-object-x-y where)))
+      (setq page (or page (pdf-view-current-page)))
+      (let* ((pos (pdf-util-scale-pixel-to-relative where))
+             (pagesize (pdf-cache-pagesize page))
+             (size (pdf-annot--free-text-size
+                    text (or (cdr (assq 'font-size properties)) 12))))
+        (setq edges (list (car pos) (cdr pos)
+                          (min 1 (+ (car pos) (/ (car size)
+                                                 (float (car pagesize)))))
+                          (min 1 (+ (cdr pos) (/ (cdr size)
+                                                 (float (cdr pagesize))))))))))
+    (pdf-annot-add-annotation 'free-text edges properties page)))
+
+(defun pdf-annot--display-ink-strokes (page strokes color width window)
+  "Show STROKES on PAGE in WINDOW, while they are being drawn.
+
+STROKES is a list of strokes, each a list of image positions
+\(X . Y\).  They are drawn with COLOR and WIDTH points."
+  (let* ((size (pdf-view-image-size nil window page))
+         (radius (max 1.0 (/ (* width (car size))
+                             (car (pdf-cache-pagesize page))
+                             2.0)))
+         (rel (lambda (x y)
+                (list (min 1.0 (max 0.0 (/ (- x radius) (car size))))
+                      (min 1.0 (max 0.0 (/ (- y radius) (cdr size))))
+                      (min 1.0 (max 0.0 (/ (+ x radius) (car size))))
+                      (min 1.0 (max 0.0 (/ (+ y radius) (cdr size)))))))
+         edges)
+    (dolist (stroke strokes)
+      (let ((prev (car stroke)))
+        (dolist (xy stroke)
+          ;; Fill the gaps between the points with small squares.
+          (let* ((dx (- (car xy) (car prev)))
+                 (dy (- (cdr xy) (cdr prev)))
+                 (n (max 1 (ceiling (max (abs dx) (abs dy)) radius))))
+            (dotimes (i n)
+              (push (funcall rel
+                             (+ (car prev) (/ (* dx (1+ i)) (float n)))
+                             (+ (cdr prev) (/ (* dy (1+ i)) (float n))))
+                    edges)))
+          (setq prev xy))))
+    (pdf-view-display-image
+     (pdf-view-create-image
+         (pdf-info-renderpage-highlight
+          page (car size) nil `(,color ,color 1.0 ,@edges))
+       :width (car size))
+     page window)))
+
+(defun pdf-annot-read-ink-strokes (&optional color width)
+  "Let the user draw strokes with the mouse in the selected window.
+
+Each drag with the left mouse button draws a stroke, a click a
+dot.  RET finishes drawing, \\[keyboard-quit] cancels it.  All
+strokes are on the page of the first one.  While drawing, they are shown in
+COLOR, red by default, and WIDTH points, by default 2.
+
+Return a cons \(PAGE . LIST-OF-STROKES\), each stroke a list
+\(X1 Y1 X2 Y2 ...\) of relative coordinates of the points the
+mouse went through."
+  (pdf-util-assert-pdf-window)
+  (let* ((window (selected-window))
+         (color (or color "red"))
+         (width (or width 2))
+         (prompt (propertize
+                  (substitute-command-keys
+                   "Draw with the mouse, RET when done, \\[keyboard-quit] to cancel")
+                  'face 'minibuffer-prompt))
+         (inside-p (lambda (posn page)
+                     (and (eq (posn-window posn) window)
+                          (posn-image posn)
+                          (or (null page)
+                              (= page (pdf-annot--posn-page posn))))))
+         page strokes done)
+    (unwind-protect
+        (while (not done)
+          (let ((event (read-event prompt)))
+            (cond
+             ((memq event '(return ?\r ?\n))
+              (setq done t))
+             ((memq event '(escape ?\e))
+              (keyboard-quit))
+             ((and (mouse-event-p event)
+                   (eq (event-basic-type event) 'mouse-1)
+                   (memq 'down (event-modifiers event))
+                   (funcall inside-p (event-start event) page))
+              (setq page (pdf-annot--posn-page (event-start event)))
+              (let ((stroke (list (posn-object-x-y (event-start event))))
+                    (time 0))
+                (track-mouse
+                  (while (mouse-movement-p (setq event (read-event)))
+                    (when (funcall inside-p (event-start event) page)
+                      (push (posn-object-x-y (event-start event)) stroke)
+                      (when (> (- (float-time) time) 0.05)
+                        (pdf-annot--display-ink-strokes
+                         page (cons stroke strokes) color width window)
+                        (setq time (float-time))))))
+                ;; EVENT releases the button: the end of a drag, or a
+                ;; click.
+                (when (and (mouse-event-p event)
+                           (funcall inside-p (event-end event) page))
+                  (push (posn-object-x-y (event-end event)) stroke))
+                (push (nreverse stroke) strokes)
+                (pdf-annot--display-ink-strokes
+                 page strokes color width window))))))
+      (pdf-view-redisplay window))
+    (unless strokes
+      (user-error "Nothing drawn"))
+    (let ((size (pdf-view-image-size nil window page)))
+      (cons page
+            (mapcar (lambda (stroke)
+                      (cl-mapcan (lambda (xy)
+                                   (list (min 1.0 (max 0.0 (/ (car xy) (float (car size)))))
+                                         (min 1.0 (max 0.0 (/ (cdr xy) (float (cdr size)))))))
+                                 stroke))
+                    (nreverse strokes))))))
+
+(defun pdf-annot-add-ink-annotation (strokes &optional color property-alist)
+  "Add a new ink (free-hand) annotation in the selected window.
+
+STROKES is a cons \(PAGE . LIST-OF-STROKES\), each stroke a list
+\(X1 Y1 X2 Y2 ...\) of the relative coordinates of the points the
+pen went through.  The strokes determine the area of the
+annotation.  Interactively, let the user draw the strokes with
+the mouse, see `pdf-annot-read-ink-strokes'.
+
+Merge COLOR as a color property with PROPERTY-ALIST and
+`pdf-annot-default-annotation-properties' and apply the result to
+the created annotation.  Its line-width property is the width of
+the strokes in points, which can not be changed afterwards.
+
+See also `pdf-annot-add-annotation'.
+
+Return the new annotation."
+  (interactive
+   (progn
+     (pdf-annot--assert-creatable 'ink)
+     (let ((properties (pdf-annot--shape-properties 'ink)))
+       (list (pdf-annot-read-ink-strokes
+              (cdr (assq 'color properties))
+              (cdr (assq 'line-width properties)))))))
+  (pdf-util-assert-pdf-window)
+  (pdf-annot--assert-creatable 'ink)
+  (pdf-annot-add-annotation
+   'ink
+   (cdr strokes)
+   (pdf-annot--shape-properties
+    'ink (and color `((color . ,color))) property-alist)
+   (car strokes)))
+
 (defun pdf-annot-read-color (&optional prompt)
   "Read and return a color using PROMPT.
 
@@ -1549,7 +1841,7 @@ occurrence in ALISTS."
   "Pretty print annotation A's property PROPERTY."
   (let ((value (pdf-annot-get a property)))
     (cl-case property
-      ((color interior-color)
+      ((color interior-color font-color)
        (propertize (or value "")
                    'face (and value
                               `(:background ,value))))

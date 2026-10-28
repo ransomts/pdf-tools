@@ -121,6 +121,14 @@
      ["line" pdf-annot-add-line-annotation]
      ["stamp" pdf-annot-add-stamp-annotation
       :visible (pdf-info-stamp-annotations-p)])
+    ["Add free text annotation" pdf-annot-add-free-text-annotation
+     :help "Write text on the page, in the region or where you click"
+     :visible (and (bound-and-true-p pdf-annot-minor-mode)
+                   (pdf-info-free-text-annotations-p))]
+    ["Add ink annotation" pdf-annot-add-ink-annotation
+     :help "Draw free-hand with the mouse"
+     :visible (and (bound-and-true-p pdf-annot-minor-mode)
+                   (pdf-info-ink-annotations-p))]
     ["--" nil :visible (bound-and-true-p pdf-annot-minor-mode)]
     ["Display Annotations" pdf-annot-list-annotations
      :help "List all annotations"

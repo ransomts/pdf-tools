@@ -39,7 +39,13 @@
   + Stamps use one of the standard icons in ~pdf-info-standard-stamp-icons~ (Approved, Confidential, Draft, ...).
   + These annotation types are now shown in the annotation list by default.
   + Requires poppler-glib >= 0.26 for square, circle and line and >= 22.07 for stamps; rebuild ~epdfinfo~ to get them.
-- New option ~pdf-annot-moveable-types~ to choose which annotations can be dragged around with the mouse; it now includes stamps.
+- Create free text and ink (free-hand) annotations #82
+  + ~C-c C-a f~ writes text on the page: it fills the selected region, or starts where you click, and is read in the minibuffer.  Editing the annotation's contents (e.g. by clicking on it) changes the text on the page.
+  + Free text is black 12pt Helvetica on a transparent background by default; set ~font-name~, ~font-size~ and ~font-color~ in ~pdf-annot-default-annotation-properties~, or change them, and the background color, from the annotation's context menu.
+  + ~C-c C-a i~ draws with the mouse: each drag is a stroke, and ~RET~ saves all strokes as one ink annotation.  Its ~line-width~ property sets the width of the strokes.
+  + Both are also in the context menu, next to "Add shape annotation", and shown in the annotation list by default.
+  + Requires poppler-glib >= 24.12 for free text and >= 25.06 for ink; rebuild ~epdfinfo~ to get them.
+- New option ~pdf-annot-moveable-types~ to choose which annotations can be dragged around with the mouse; it now includes stamps and free text.
 - Select words and lines with the mouse, as in other PDF viewers #30 #132
   + Double-click selects the word under the mouse, triple-click the line. Dragging after the double or triple click extends the selection by whole words or lines.
   + ~S-mouse-1~ moves the end of the selection to the click (~pdf-view-mouse-set-region-end~), keeping the word or line steps of a double or triple click.
@@ -63,11 +69,12 @@
   + ~structure~ needs poppler-glib >= 0.26; ~pdf-info-structure-tree-p~ tells whether the server has it (feature ~structure-tree~).
   + With its optional argument (~FULL~ in ~pdf-info-structure~), ~structure~ returns the whole text of each element for reading it, without the text of nested figures, and the numbering of list items.
 - ~epdfinfo~ reports the features ~shape-annotations~ and ~stamp-annotations~; ~addannot~ accepts the types ~square~, ~circle~, ~line~ (with optional start and end points) and ~stamp~ (with an optional icon), and ~editannot~ the properties ~interior-color~ and ~line~ and ~icon~ for stamps.
-- New functions ~pdf-info-shape-annotations-p~ and ~pdf-info-stamp-annotations-p~.
+- New functions ~pdf-info-shape-annotations-p~, ~pdf-info-stamp-annotations-p~, ~pdf-info-free-text-annotations-p~ and ~pdf-info-ink-annotations-p~.
 - New ~pdf-view-region-selection-style~ returns the selection style to read ~pdf-view-active-region~ with
   + A double or triple click makes a region that selects by ~word~ or ~line~ regardless of ~pdf-view-selection-style~. Code that passes the region's edges to ~pdf-info-gettext~ or ~pdf-info-getselection~ should use this function instead of ~pdf-view-selection-style~; ~pdf-view-active-region-text~ and the annotation commands already do.
 - New server commands ~layers~, ~setlayer~ and ~ocgstate~, with the wrappers ~pdf-info-layers~, ~pdf-info-setlayer~ and ~pdf-info-ocgstate~; ~pdf-info-layers-p~ tells whether the server has them (feature ~layers~).
 - ~pdf-info-pagelinks~ returns links of the new type ~ocg-state~.
+- ~epdfinfo~ reports the features ~free-text-annotations~ and ~ink-annotations~; ~addannot~ accepts the types ~free-text~ and ~ink~ (with an optional line width and one or more strokes), ~editannot~ the properties ~font-name~, ~font-size~ and ~font-color~ for free text, and ~getannots~ reports the font of free text annotations.
 
 * Version 1.3.0
 ** New functionality to improve overall user experience
