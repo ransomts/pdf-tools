@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Emacs
         uses: purcell/setup-emacs@master
@@ -84,7 +84,7 @@ jobs:
 
       - name: Upload sanitizer reports
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: asan-logs
           path: asan-logs/
