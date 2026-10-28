@@ -235,7 +235,7 @@ This also applies when updating via MELPA / NonGNU ELPA (except for running the 
 + SyncTeX :: Jump from a position on a page directly to the TeX source and vice versa.
 + Virtual :: Use a collection of documents as if it were one, big single PDF.
 + Misc ::
-  - Display PDF's metadata.
+  - Display and edit PDF's metadata (title, author, subject, keywords, creator).
   - Mark a region and kill the text from the PDF.
   - Keep track of visited pages via a history.
   - Apply a color filter for reading in low light conditions.
