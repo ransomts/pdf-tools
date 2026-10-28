@@ -3239,7 +3239,12 @@ structure_kind_string (PopplerStructureElementKind kind)
    Three bytes (0x7F, 0x9F and 0xAD) all map to U+FFFD; it is taken
    as the one that makes a valid sequence, 0x9F when both 0x9F and
    0xAD would.  Return the text unchanged if it cannot be undone,
-   e.g. because a future poppler returns it right. */
+   e.g. because a future poppler returns it right.
+
+   FIXME: This guess is wrong for every character whose UTF-8 has
+   0xAD as a continuation byte, e.g. í (C3 AD) comes out as ß (C3 9F)
+   and Э (D0 AD) as П (D0 9F).  Read the text from the page text
+   instead, as pdf-reflow already does to find an element's area. */
 static gchar *
 structure_element_text (PopplerStructureElement *elt, gboolean recursive)
 {
