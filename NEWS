@@ -1,4 +1,13 @@
 -*- org -*-
+* Unreleased
+** New functionality
+- Edit a PDF's metadata with ~M-x pdf-misc-edit-metadata~
+  + Lists the title, author, subject, keywords and creator in a buffer; edit them and press ~C-c C-c~ to apply or ~C-c C-k~ to cancel. ~e~ in the ~pdf-metadata-buffer-mode~ buffer (~I~) does the same, and the PDF Tools menu has an /Edit Metadata/ entry.
+  + Applying marks the PDF buffer as modified: save it to write the metadata to the file, revert it to discard the change.
+  + ~pdf-misc-set-metadata~ sets one field, ~pdf-misc-update-metadata~ several; both work from Lisp.
+  + Only the document information dictionary is changed; poppler leaves the XMP metadata stream alone. When the title changes and the document's XMP has a different ~dc:title~ (which PDF/UA and accessibility checkers read), a warning of type ~(pdf-misc xmp)~ says so. ~pdf-misc-metadata-xmp-title~ returns the XMP title.
+  + New epdfinfo commands ~setmetadata~ and ~xmp-metadata~, with Lisp wrappers ~pdf-info-setmetadata~ and ~pdf-info-xmp-metadata~. Writing metadata requires poppler-glib >= 0.46 and is reported as the ~writable-metadata~ feature.
+
 * Version 1.3.0
 ** New functionality to improve overall user experience
 - Add ~pdf-view-roll-minor-mode~ for continuous scrolling @dalanicolai @aikrahguzar #224
