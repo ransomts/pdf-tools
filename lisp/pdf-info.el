@@ -522,7 +522,7 @@ interrupted."
                                  (split-string (pop r) " " t)))
                  ,@(pdf-info-query--transform-action r)))
              response))
-    (metadata
+    ((metadata setmetadata)
      (let ((md (car response)))
        (if (= 1 (length md))
            (list (cons 'title (car md)))
@@ -537,6 +537,9 @@ interrupted."
           (cons 'format (pop md))
           (cons 'created (pop md))
           (cons 'modified (pop md))))))
+    (xmp-metadata
+     (let ((xmp (caar response)))
+       (and xmp (not (equal xmp "")) xmp)))
     (gettext
      (or (caar response) ""))
     (getselection
@@ -1021,6 +1024,13 @@ A No-op, if BUFFER has not running server instance."
   `(unless (memq 'markup-annotations (pdf-info-features))
      (error "Creating markup annotations is not supported by this version of epdfinfo")))
 
+(defun pdf-info-writable-metadata-p ()
+  (not (null (memq 'writable-metadata (pdf-info-features)))))
+
+(defmacro pdf-info-assert-writable-metadata ()
+  `(unless (memq 'writable-metadata (pdf-info-features))
+     (error "Writing metadata is not supported by this version of epdfinfo")))
+
 (defun pdf-info-creatable-annotation-types ()
   (let ((features (pdf-info-features)))
     (cond
@@ -1081,6 +1091,55 @@ This returns an alist containing some information about the
 document."
   (pdf-info-query
    'metadata
+   (pdf-info--normalize-file-or-buffer file-or-buffer)))
+
+(defconst pdf-info-writable-metadata-keys
+  '(title author subject keywords creator)
+  "The metadata keys, which `pdf-info-setmetadata' can change.")
+
+(defun pdf-info-setmetadata (metadata &optional file-or-buffer)
+  "Change the metadata of the document FILE-OR-BUFFER.
+
+METADATA is an alist of keys and their new values.  Valid keys
+are the members of `pdf-info-writable-metadata-keys'.  A value
+should be a string; for `keywords' it may also be a list of
+strings, which are joined by \", \".  A value of nil or the empty
+string removes the entry from the document.
+
+This changes the document held by the server.  The change is
+written to a file by `pdf-info-save', and discarded when the
+document is closed without saving.
+
+Only the document information dictionary is changed.  Poppler
+leaves the XMP metadata stream alone, if the document has one,
+see `pdf-info-xmp-metadata'.
+
+Returns the document's metadata after the change, in the format
+of `pdf-info-metadata'.  The server must support writing metadata
+for this to work."
+  (pdf-info-assert-writable-metadata)
+  (apply #'pdf-info-query
+         'setmetadata
+         (pdf-info--normalize-file-or-buffer file-or-buffer)
+         (apply #'append
+                (mapcar
+                 (lambda (elt)
+                   (unless (memq (car elt) pdf-info-writable-metadata-keys)
+                     (error "Metadata key is not writable: %s" (car elt)))
+                   (list (car elt)
+                         (if (and (eq (car elt) 'keywords)
+                                  (consp (cdr elt)))
+                             (mapconcat #'identity (cdr elt) ", ")
+                           (or (cdr elt) ""))))
+                 metadata))))
+
+(defun pdf-info-xmp-metadata (&optional file-or-buffer)
+  "Return the XMP metadata packet of the document FILE-OR-BUFFER.
+
+The packet is returned as a string of XML, or nil if the document
+has no XMP metadata stream."
+  (pdf-info-query
+   'xmp-metadata
    (pdf-info--normalize-file-or-buffer file-or-buffer)))
 
 (defun pdf-info-search-string (string &optional pages file-or-buffer)
