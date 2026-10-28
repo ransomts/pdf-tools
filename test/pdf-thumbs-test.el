@@ -32,16 +32,17 @@ buffer and `file' to its file."
                ;; The mode may have failed half way while
                ;; `pdf-test-with-pdf' restarted the server.
                (pdf-view-mode)
-               (let ((pdf (current-buffer)))
-                 (switch-to-buffer pdf)
-                 ;; Batch mode sets up the window properties for the
-                 ;; window-less case (t); there is a window here.
-                 (when (eq image-mode-winprops-alist t)
-                   (setq image-mode-winprops-alist nil))
-                 ;; Batch mode cannot display the page images, so
-                 ;; only the window's page number changes.
-                 (cl-letf (((symbol-function 'pdf-view-redisplay) #'ignore)
-                           ((symbol-function 'pdf-view-display-page) #'ignore))
+               ;; Batch mode cannot display the page images, so only
+               ;; the window's page number changes.  Emacs 26 already
+               ;; displays the page when the buffer gets a window.
+               (cl-letf (((symbol-function 'pdf-view-redisplay) #'ignore)
+                         ((symbol-function 'pdf-view-display-page) #'ignore))
+                 (let ((pdf (current-buffer)))
+                   (switch-to-buffer pdf)
+                   ;; Batch mode sets up the window properties for the
+                   ;; window-less case (t); there is a window here.
+                   (when (eq image-mode-winprops-alist t)
+                     (setq image-mode-winprops-alist nil))
                    (let ((,grid (pdf-thumbs)))
                      (unwind-protect
                          (with-current-buffer ,grid ,@body)
