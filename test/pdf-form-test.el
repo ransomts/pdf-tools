@@ -135,12 +135,15 @@
   (plist-get (cdr image) :data))
 
 (defmacro pdf-form-test-with-images (&rest body)
-  "Run BODY with a `create-image' that works without PNG support.
+  "Run BODY so that page images can be created without PNG support.
 
 These tests only compare the image data, and the Emacs builds CI
-uses cannot create PNG images."
+uses cannot create PNG images: `pdf-view-image-type' signals an
+error, and so would `create-image'."
   (declare (indent 0) (debug t))
-  `(cl-letf (((symbol-function 'create-image)
+  `(cl-letf (((symbol-function 'pdf-view-image-type)
+              (lambda () 'png))
+             ((symbol-function 'create-image)
               (lambda (data &optional type _data-p &rest props)
                 `(image :type ,type :data ,data ,@props))))
      ,@body))
