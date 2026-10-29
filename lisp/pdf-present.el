@@ -64,8 +64,9 @@
 ;; In both frames: n/p (also PageDown/PageUp, the arrow keys, SPC and
 ;; DEL, which is what presentation clickers send) move by one slide, </>
 ;; (Home/End) go to the first/last slide, g asks for a slide number, b
-;; and w black or white out the audience screen, t pauses the timer, r
-;; resets it, and q ends the presentation and restores everything.
+;; and w black or white out the audience screen, d sets the talk's
+;; planned length, t pauses the timer, r resets it, and q ends the
+;; presentation and restores everything.
 
 (require 'pdf-view)
 (require 'pdf-info)
@@ -166,6 +167,23 @@ smaller counts mean one slide."
   :group 'pdf-present
   :type 'natnum)
 
+(defcustom pdf-present-talk-duration nil
+  "Planned length of the talk, in minutes.
+When set, the presenter view shows how much of it is left, in the
+`pdf-present-alert' face once little is left (see
+`pdf-present-talk-warning') and as overtime once it is over.  The
+`d' key sets it while presenting."
+  :group 'pdf-present
+  :type '(choice (const :tag "No planned duration" nil)
+                 (number :tag "Minutes")))
+
+(defcustom pdf-present-talk-warning 2
+  "Minutes left of the talk at which to warn the presenter.
+The time left is shown in the `pdf-present-alert' face from here
+on down, and when the talk is over."
+  :group 'pdf-present
+  :type 'number)
+
 (defcustom pdf-present-start-hook nil
   "Hook run after a presentation has started.
 The PDF buffer is current."
@@ -218,6 +236,8 @@ The PDF buffer is current."
   (elapsed 0.0)
   ;; `float-time' at which the timer was last started, or nil if paused.
   running-since
+  ;; Planned length of the talk in minutes, or nil for none.
+  duration
   ;; The timer that updates the clock.
   ticker
   ;; The idle timer rendering coming slides in advance, or nil.
@@ -404,7 +424,8 @@ LAYOUT overrides `pdf-present-notes-layout'."
        :layout layout
        :map (pdf-present--page-map layout (pdf-cache-number-of-pages)
                                    (cdr detected))
-       :labels (pdf-present--labels buffer layout)))))
+       :labels (pdf-present--labels buffer layout)
+       :duration pdf-present-talk-duration))))
 
 
 
@@ -442,6 +463,13 @@ LAYOUT overrides `pdf-present-notes-layout'."
   "Format SECONDS as H:MM:SS."
   (let ((s (floor seconds)))
     (format "%d:%02d:%02d" (/ s 3600) (% (/ s 60) 60) (% s 60))))
+
+(defun pdf-present--left (session &optional now)
+  "Return the seconds left of SESSION's talk duration, or nil.
+NOW is as in `pdf-present--elapsed'; a negative result is
+overtime."
+  (when-let* ((minutes (pdf-present--session-duration session)))
+    (- (* minutes 60) (pdf-present--elapsed session now))))
 
 
 
@@ -566,6 +594,17 @@ This is the only place that puts a PDF page on the screen."
                  'face 'pdf-present-info)
      (if running "" (propertize "   paused" 'face 'pdf-present-alert))
      "\n"
+     (when-let* ((left (pdf-present--left session now)))
+       (concat
+        (if (>= left 0)
+            (propertize
+             (format "Left    %s" (pdf-present--format-duration left))
+             'face (if (<= left (* 60 pdf-present-talk-warning))
+                       'pdf-present-alert 'pdf-present-info))
+          (propertize
+           (format "Over    %s" (pdf-present--format-duration (- left)))
+           'face 'pdf-present-alert))
+        "\n"))
      (propertize (format "Time    %s"
                          (format-time-string pdf-present-clock-format
                                              (and now (seconds-to-time now))))
@@ -577,7 +616,7 @@ This is the only place that puts a PDF page on the screen."
        "\n")
      "\n"
      (propertize (concat "n/p next/previous   g go to   b/w black/white\n"
-                         "t pause timer   r reset timer   q quit")
+                         "d duration   t pause timer   r reset timer   q quit")
                  'face 'pdf-present-label))))
 
 (defun pdf-present--update-info (session)
@@ -925,6 +964,7 @@ and nil turns the prefetching off."
       (define-key map (kbd key) #'pdf-present-toggle-white))
     (define-key map (kbd "t") #'pdf-present-toggle-timer)
     (define-key map (kbd "r") #'pdf-present-reset-timer)
+    (define-key map (kbd "d") #'pdf-present-set-duration)
     (define-key map (kbd "q") #'pdf-present-quit)
     map)
   "Keymap of the presentation's buffers.")
@@ -1017,6 +1057,20 @@ Showing a slide ends a black or white screen."
     (pdf-present--timer-reset session)
     (pdf-present--update-info session)))
 
+(defun pdf-present-set-duration (minutes)
+  "Set the planned length of the talk to MINUTES.
+Zero or less clears it.  Without a prefix argument, asks; the
+initial value is `pdf-present-talk-duration'."
+  (interactive
+   (let ((session (pdf-present--session-or-error)))
+     (list (read-number "Talk duration in minutes (0 clears): "
+                        (or (pdf-present--session-duration session)
+                            pdf-present-talk-duration 0)))))
+  (let ((session (pdf-present--session-or-error)))
+    (setf (pdf-present--session-duration session)
+          (and (> minutes 0) minutes))
+    (pdf-present--update-info session)))
+
 ;;;###autoload
 (defun pdf-present (&optional choose-monitor)
   "Present the PDF in the current buffer.
@@ -1040,6 +1094,7 @@ Keys, in both frames:
 \\[pdf-present-toggle-black], \\[pdf-present-toggle-white]	black or white audience screen (again to undo)
 \\[pdf-present-toggle-timer]	pause or resume the timer
 \\[pdf-present-reset-timer]	reset the timer
+\\[pdf-present-set-duration]	set the talk's planned length (see `pdf-present-talk-duration')
 \\[pdf-present-quit]	end the presentation
 
 \\[pdf-present-quit] deletes both frames and puts the buffer and its
