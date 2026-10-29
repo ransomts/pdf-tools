@@ -498,6 +498,7 @@ These work in both frames. The page and arrow keys are what most presentation cl
 | Go to slide number       | ~g~ (or a prefix argument: ~C-u 12 g~)           |
 | Black screen on/off      | ~b~, ~.~                                         |
 | White screen on/off      | ~w~, ~,~                                         |
+| Set the talk's length    | ~d~                                              |
 | Pause / resume the timer | ~t~                                              |
 | Reset the timer          | ~r~                                              |
 | End the presentation     | ~q~                                              |

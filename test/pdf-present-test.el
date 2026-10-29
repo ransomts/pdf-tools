@@ -371,6 +371,39 @@ The presentation is ended afterwards if BODY did not end it."
   (should (equal (pdf-present--format-duration 3725) "1:02:05"))
   (should (equal (pdf-present--format-duration 36000) "10:00:00")))
 
+(ert-deftest pdf-present-talk-time ()
+  (pdf-present-test-presenting "present-plain.pdf"
+    (let ((pdf-present-talk-duration 10))
+      (pdf-present))
+    (let ((s pdf-present--session))
+      (pdf-present--timer-pause s)
+      ;; Ten-minute talk, half a minute gone: 9:30 left, plain face.
+      (setf (pdf-present--session-elapsed s) 30.0)
+      (should (= (pdf-present--left s) 570))
+      (let ((text (pdf-present--info-text s)))
+        (should (string-match "Left    0:09:30" text))
+        (should (eq (get-text-property (match-beginning 0) 'face text)
+                    'pdf-present-info)))
+      ;; Two minutes left is little: the alert face.
+      (setf (pdf-present--session-elapsed s) (* 8 60))
+      (let ((text (pdf-present--info-text s)))
+        (should (string-match "Left    0:02:00" text))
+        (should (eq (get-text-property (match-beginning 0) 'face text)
+                    'pdf-present-alert)))
+      ;; Over time shows as overtime, in the alert face.
+      (setf (pdf-present--session-elapsed s) (* 11 60))
+      (let ((text (pdf-present--info-text s)))
+        (should (string-match "Over    0:01:00" text))
+        (should (eq (get-text-property (match-beginning 0) 'face text)
+                    'pdf-present-alert)))
+      ;; Setting the duration shows at once, and clearing it hides
+      ;; the line again.
+      (pdf-present-set-duration 5)
+      (should (= (pdf-present--left s) (- (* 5 60) (* 11 60))))
+      (pdf-present-set-duration 0)
+      (should (string-match-p "Elapsed" (pdf-present--info-text s)))
+      (should-not (string-match-p "Left" (pdf-present--info-text s))))))
+
 (ert-deftest pdf-present-info-text ()
   (let ((s (pdf-present--session-create
             :map [(1) (3) (5)] :labels ["1" "2" "2" "3" "3"] :index 2
