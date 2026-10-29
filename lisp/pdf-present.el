@@ -63,15 +63,17 @@
 ;;
 ;; In both frames: n/p (also PageDown/PageUp, the arrow keys, SPC and
 ;; DEL, which is what presentation clickers send) move by one slide, </>
-;; (Home/End) go to the first/last slide, g asks for a slide number, b
-;; and w black or white out the audience screen, d sets the talk's
-;; planned length, t pauses the timer, r resets it, and q ends the
-;; presentation and restores everything.
+;; (Home/End) go to the first/last slide, g asks for a slide number, T
+;; shows every slide as thumbnails to pick one, b and w black or
+;; white out the audience screen, d sets the talk's planned length, t
+;; pauses the timer, r resets it, and q ends the presentation and
+;; restores everything.
 
 (require 'pdf-view)
 (require 'pdf-info)
 (require 'pdf-cache)
 (require 'pdf-util)
+(require 'pdf-thumbs)
 (require 'cl-lib)
 (require 'subr-x)
 
@@ -244,6 +246,8 @@ The PDF buffer is current."
   prefetch
   audience-frame presenter-frame
   audience-window current-window next-window notes-window info-window
+  ;; The grid buffer of the slide overview, when it is open.
+  overview
   ;; Where `pdf-present' was called, and what to restore on quit.
   origin-frame origin-window saved
   ;; Non-nil while quitting.
@@ -615,8 +619,8 @@ This is the only place that puts a PDF page on the screen."
                      'face 'pdf-present-alert)
        "\n")
      "\n"
-     (propertize (concat "n/p next/previous   g go to   b/w black/white\n"
-                         "d duration   t pause timer   r reset timer   q quit")
+     (propertize (concat "n/p next/previous   g go to   T all slides\n"
+                         "b/w black/white   d duration   t/r timer   q quit")
                  'face 'pdf-present-label))))
 
 (defun pdf-present--update-info (session)
@@ -768,6 +772,7 @@ MONITOR-SPEC is like `pdf-present-audience-monitor'."
 
 (defun pdf-present--teardown-display (session)
   "Delete the frames of SESSION and kill the helper buffers."
+  (pdf-present--overview-close session)
   (dolist (frame (list (pdf-present--session-audience-frame session)
                        (pdf-present--session-presenter-frame session)))
     (when (frame-live-p frame)
@@ -958,6 +963,7 @@ and nil turns the prefetching off."
       (define-key map (kbd key) #'pdf-present-last-slide))
     (dolist (key '("g" "M-g g" "M-g M-g"))
       (define-key map (kbd key) #'pdf-present-goto-slide))
+    (define-key map (kbd "T") #'pdf-present-overview)
     (dolist (key '("b" "."))
       (define-key map (kbd key) #'pdf-present-toggle-black))
     (dolist (key '("w" ","))
@@ -1071,6 +1077,101 @@ initial value is `pdf-present-talk-duration'."
           (and (> minutes 0) minutes))
     (pdf-present--update-info session)))
 
+
+;; * ================================================================== *
+;; * Slide overview
+;; * ================================================================== *
+
+(defvar pdf-present-overview-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'pdf-present-overview-goto)
+    (define-key map [mouse-2] #'pdf-present-overview-goto-mouse)
+    (define-key map (kbd "q") #'pdf-present-overview-quit)
+    (define-key map (kbd "T") #'pdf-present-overview-quit)
+    map)
+  "Keymap of the presentation's overview grid.")
+
+(define-minor-mode pdf-present-overview-mode
+  "Keys for picking a slide from a running presentation.
+Turned on by `pdf-present-overview' in the thumbnail grid that it
+opens; the keys of `pdf-thumbs-mode' move around the grid.
+\\{pdf-present-overview-mode-map}"
+  :keymap pdf-present-overview-mode-map
+  :group 'pdf-present)
+
+(defun pdf-present--overview-buffer (session)
+  "Return SESSION's overview grid, if it is open."
+  (when-let* ((grid (pdf-present--session-overview session)))
+    (and (buffer-live-p grid)
+         (buffer-local-value 'pdf-present-overview-mode grid)
+         grid)))
+
+(defun pdf-present--overview-close (session &optional redisplay)
+  "Close SESSION's overview grid; show slides again when REDISPLAY."
+  (when-let* ((grid (pdf-present--session-overview session)))
+    (when (buffer-live-p grid)
+      (with-current-buffer grid
+        (pdf-present-overview-mode -1))))
+  (setf (pdf-present--session-overview session) nil)
+  (when redisplay
+    (pdf-present--refresh session)))
+
+(defun pdf-present-overview ()
+  "Show all the slides as thumbnails, and jump to the one picked.
+The grid takes the current-slide window; the audience keeps
+seeing the current slide, so browsing it does not flash by.
+RET or a click on a thumbnail moves the presentation to its
+slide; \\[pdf-present-overview-quit] or `T' again closes the grid
+without moving."
+  (interactive)
+  (let ((session (pdf-present--session-or-error)))
+    (if (pdf-present--overview-buffer session)
+        (pdf-present--overview-close session t)
+      (let ((window (pdf-present--session-current-window session))
+            (buffer (pdf-present--session-buffer session)))
+        (unless (and (window-live-p window) (buffer-live-p buffer))
+          (user-error "No window to show the overview in"))
+        (let ((grid (with-current-buffer buffer
+                     (pdf-thumbs-noselect buffer)))
+              (page (pdf-present--slide-page session)))
+          (setf (pdf-present--session-overview session) grid)
+          (with-current-buffer grid
+            (pdf-present-overview-mode 1)
+            (setq pdf-thumbs-pdf-window window)
+            (pdf-thumbs--layout-if-needed window)
+            (pdf-thumbs--set-current page)
+            (set-window-buffer window grid)
+            (set-window-point window (pdf-thumbs--cell page))
+            (pdf-thumbs--schedule))
+          (select-window window))))))
+
+(defun pdf-present--overview-goto (page)
+  "Jump the presentation to the slide that PAGE belongs to."
+  (let ((session (pdf-present--session-or-error)))
+    ;; Close the grid without redisplaying the old slide first.
+    (pdf-present--overview-close session)
+    (pdf-present-goto-slide
+     (pdf-present--index-of-page session page))))
+
+(defun pdf-present-overview-goto ()
+  "Jump the presentation to the slide whose thumbnail is at point."
+  (interactive)
+  (pdf-present--overview-goto (pdf-thumbs-page-at-point)))
+
+(defun pdf-present-overview-goto-mouse (event)
+  "Jump the presentation to the slide whose thumbnail was clicked."
+  (interactive "@e")
+  (let* ((pos (posn-point (event-start event)))
+         (page (and pos (get-text-property pos 'pdf-thumbs-page))))
+    (when page
+      (pdf-thumbs-goto-thumbnail page)
+      (pdf-present--overview-goto page))))
+
+(defun pdf-present-overview-quit ()
+  "Close the overview grid, back to the current slide."
+  (interactive)
+  (pdf-present--overview-close (pdf-present--session-or-error) t))
+
 ;;;###autoload
 (defun pdf-present (&optional choose-monitor)
   "Present the PDF in the current buffer.
@@ -1091,6 +1192,7 @@ Keys, in both frames:
 \\[pdf-present-next-slide], \\[pdf-present-previous-slide]	next, previous slide (also PageDown/PageUp, arrows)
 \\[pdf-present-first-slide], \\[pdf-present-last-slide]	first, last slide
 \\[pdf-present-goto-slide]	go to a slide by number
+\\[pdf-present-overview]	show all slides as thumbnails; pick one to jump there
 \\[pdf-present-toggle-black], \\[pdf-present-toggle-white]	black or white audience screen (again to undo)
 \\[pdf-present-toggle-timer]	pause or resume the timer
 \\[pdf-present-reset-timer]	reset the timer

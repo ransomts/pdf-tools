@@ -496,6 +496,7 @@ These work in both frames. The page and arrow keys are what most presentation cl
 | Previous slide           | ~p~, ~DEL~, ~S-SPC~, ~<prior>~, ~<left>~, ~<up>~ |
 | First / last slide       | ~<~ / ~>~, ~<home>~ / ~<end>~                    |
 | Go to slide number       | ~g~ (or a prefix argument: ~C-u 12 g~)           |
+| Show all slides; pick one | ~T~                                            |
 | Black screen on/off      | ~b~, ~.~                                         |
 | White screen on/off      | ~w~, ~,~                                         |
 | Set the talk's length    | ~d~                                              |
