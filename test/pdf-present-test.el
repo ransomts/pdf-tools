@@ -78,6 +78,10 @@ The presentation is ended afterwards if BODY did not end it."
        (let ((pdf-present-notes-layout 'auto)
              (pdf-present-start-hook nil)
              (pdf-present-quit-hook nil)
+             ;; Batch Emacs is never idle, and the timer would render
+             ;; real pages; `pdf-present-prefetch-timer' tests it by
+             ;; hand instead.
+             (pdf-present-prefetch-delay nil)
              ;; Before Emacs 28 the batch frame is 10x9, too small
              ;; for the fake layout with the default minimum sizes.
              (window-min-height 1)
@@ -379,6 +383,56 @@ The presentation is ended afterwards if BODY did not end it."
 
 
 ;; * ================================================================== *
+;; * Prefetching
+;; * ================================================================== *
+
+(ert-deftest pdf-present-next-pages ()
+  (pdf-present-test-presenting "present-notes-pages.pdf"
+    (pdf-present)
+    (let ((s pdf-present--session))
+      ;; Moving on from slide 1 shows slide 2 (page 3) on the
+      ;; audience and current windows, slide 3 (page 5) on the next
+      ;; window, and the notes of slide 2 (page 4) on the notes
+      ;; window.
+      (should (equal (pdf-present--next-pages s)
+                     (list (cons (pdf-present--session-notes-window s) 4)
+                           (cons (pdf-present--session-next-window s) 5)
+                           (cons (pdf-present--session-audience-window s) 3)
+                           (cons (pdf-present--session-current-window s) 3))))
+      (pdf-present-last-slide)
+      (should-not (pdf-present--next-pages s)))))
+
+(ert-deftest pdf-present-prefetch-timer ()
+  (pdf-present-test-presenting "present-plain.pdf"
+    (pdf-present)
+    ;; The presenting macro turns prefetching off: no timer is made.
+    (should-not (pdf-present--session-prefetch pdf-present--session))
+    (let ((pdf-present-prefetch-delay 0.5))
+      (pdf-present--schedule-prefetch pdf-present--session)
+      (let ((timer (pdf-present--session-prefetch pdf-present--session)))
+        (should (timerp timer))
+        (should (memq timer timer-idle-list))
+        ;; Moving to another slide replaces the timer.
+        (pdf-present-next-slide)
+        (should-not (memq timer timer-idle-list))
+        (should (memq (pdf-present--session-prefetch pdf-present--session)
+                      timer-idle-list))
+        ;; Quitting cancels it.
+        (pdf-present-quit)
+        (should-not (memq timer timer-idle-list))))))
+
+(ert-deftest pdf-present-prefetch-after-resize ()
+  "A window manager that resizes the windows makes the prefetched
+pages stale; `pdf-present--on-resize' prefetches them again."
+  (pdf-present-test-presenting "present-plain.pdf"
+    (pdf-present)
+    (let ((pdf-present-prefetch-delay 0.5))
+      (pdf-present--on-resize (selected-frame))
+      (should (timerp (pdf-present--session-prefetch pdf-present--session))))))
+
+
+
+;; * ================================================================== *
 ;; * Monitors
 ;; * ================================================================== *
 
@@ -398,6 +452,18 @@ The presentation is ended afterwards if BODY did not end it."
     (should (eq (pdf-present--choose-monitor monitors laptop "VGA") projector))
     ;; One monitor: the presenter's.
     (should (eq (pdf-present--choose-monitor (list laptop) laptop) laptop))))
+
+(ert-deftest pdf-present-audience-rectangle ()
+  (let ((laptop '((name . "eDP-1") (geometry 0 0 1920 1080)
+                  (workarea 0 40 1920 1040)))
+        (projector '((name . "HDMI-1") (geometry 1920 0 1280 720)
+                     (workarea 1920 0 1280 720))))
+    ;; Two monitors: the whole monitor, panels or not.
+    (should (equal (pdf-present--audience-rectangle projector nil)
+                   '(1920 0 1280 720)))
+    ;; One monitor: a quarter of the workarea, not of the monitor.
+    (should (equal (pdf-present--audience-rectangle laptop t)
+                   '(0 40 960 520)))))
 
 
 ;; * ================================================================== *
