@@ -386,21 +386,51 @@ The presentation is ended afterwards if BODY did not end it."
 ;; * Prefetching
 ;; * ================================================================== *
 
-(ert-deftest pdf-present-next-pages ()
+(ert-deftest pdf-present-slide-pages ()
   (pdf-present-test-presenting "present-notes-pages.pdf"
     (pdf-present)
     (let ((s pdf-present--session))
-      ;; Moving on from slide 1 shows slide 2 (page 3) on the
-      ;; audience and current windows, slide 3 (page 5) on the next
-      ;; window, and the notes of slide 2 (page 4) on the notes
-      ;; window.
-      (should (equal (pdf-present--next-pages s)
-                     (list (cons (pdf-present--session-notes-window s) 4)
-                           (cons (pdf-present--session-next-window s) 5)
+      ;; On slide 2 (page 3), the audience and current windows show
+      ;; its page, the notes window its notes page (4), and the next
+      ;; window the page of slide 3 (5).
+      (should (equal (pdf-present--slide-pages s 2)
+                     (list (cons (pdf-present--session-next-window s) 5)
+                           (cons (pdf-present--session-notes-window s) 4)
                            (cons (pdf-present--session-audience-window s) 3)
                            (cons (pdf-present--session-current-window s) 3))))
-      (pdf-present-last-slide)
-      (should-not (pdf-present--next-pages s)))))
+      ;; Slide 4 (page 7) has no notes page.
+      (should (equal (pdf-present--slide-pages s 4)
+                     (list (cons (pdf-present--session-next-window s) 8)
+                           (cons (pdf-present--session-audience-window s) 7)
+                           (cons (pdf-present--session-current-window s) 7))))
+      ;; On the last slide, the next window shows nothing.
+      (should (equal (pdf-present--slide-pages s 5)
+                     (list (cons (pdf-present--session-notes-window s) 9)
+                           (cons (pdf-present--session-audience-window s) 8)
+                           (cons (pdf-present--session-current-window s) 8)))))))
+
+(ert-deftest pdf-present-prefetch-chain ()
+  "One slide is prefetched per idle timer, chained up to
+`pdf-present-prefetch-count' slides beyond the current one."
+  (pdf-present-test-presenting "present-plain.pdf"
+    (pdf-present)
+    (let ((s pdf-present--session))
+      ;; With a count of one, only the next slide is rendered.
+      (let ((pdf-present-prefetch-delay 0.5)
+            (pdf-present-prefetch-count 1))
+        (pdf-present--prefetch s 2)
+        (should-not (pdf-present--session-prefetch s)))
+      ;; Beyond the count of slides from slide 1, nothing is
+      ;; rendered and nothing is chained.
+      (let ((pdf-present-prefetch-delay 0.5)
+            (pdf-present-prefetch-count 3))
+        (pdf-present--prefetch s 5)
+        (should-not (pdf-present--session-prefetch s))
+        ;; Rendering slide 2 of 5 chains slide 3; quitting at the
+        ;; end of the test cancels it.
+        (pdf-present--prefetch s 2)
+        (should (memq (pdf-present--session-prefetch s)
+                      timer-idle-list))))))
 
 (ert-deftest pdf-present-prefetch-timer ()
   (pdf-present-test-presenting "present-plain.pdf"
