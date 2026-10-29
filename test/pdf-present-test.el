@@ -493,6 +493,39 @@ pages stale; `pdf-present--on-resize' prefetches them again."
       (pdf-present--on-resize (selected-frame))
       (should (timerp (pdf-present--session-prefetch pdf-present--session))))))
 
+(ert-deftest pdf-present-overview ()
+  (pdf-present-test-presenting "present-plain.pdf"
+    (pdf-present)
+    (let* ((s pdf-present--session)
+           (window (pdf-present--session-current-window s))
+           (pdf (pdf-present--session-buffer s)))
+      ;; T shows the grid in the current-slide window; the audience
+      ;; keeps seeing the slide.
+      (pdf-present-overview)
+      (let ((grid (pdf-present--session-overview s)))
+        (should (buffer-live-p grid))
+        (should (eq (window-buffer window) grid))
+        (should (buffer-local-value 'pdf-present-overview-mode grid))
+        (should (eq (window-buffer (pdf-present--session-audience-window s))
+                    pdf))
+        ;; Picking a thumbnail jumps the presentation to its slide
+        ;; and puts the slide back in the window.
+        (with-current-buffer grid
+          (goto-char (pdf-thumbs--cell 3))
+          (pdf-present-overview-goto))
+        (should (= (pdf-present--session-index s) 3))
+        (should (eq (window-buffer window) pdf))
+        (should-not (buffer-local-value 'pdf-present-overview-mode grid))
+        (with-current-buffer pdf
+          (should (equal (plist-get (pdf-present-test--state) :audience)
+                         '(3 nil)))))
+      ;; T again opens the grid, and closes it without moving.
+      (pdf-present-overview)
+      (should (buffer-live-p (pdf-present--session-overview s)))
+      (pdf-present-overview)
+      (should-not (pdf-present--session-overview s))
+      (should (eq (window-buffer window) pdf)))))
+
 
 
 ;; * ================================================================== *
