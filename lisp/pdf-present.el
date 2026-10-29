@@ -61,6 +61,11 @@
 ;;
 ;; - `none': a PDF without notes.
 ;;
+;; While the presentation runs, the deck's file is watched: when a
+;; compiler rewrites it, it is read again once it has settled, and
+;; the slides re-detected, keeping the current one and the timers
+;; (see `pdf-present-auto-reload').
+;;
 ;; In both frames: n/p (also PageDown/PageUp, the arrow keys, SPC and
 ;; DEL, which is what presentation clickers send) move by one slide, </>
 ;; (Home/End) go to the first/last slide, g asks for a slide number, T
@@ -79,6 +84,9 @@
 
 (defvar pdf-view-roll-minor-mode)
 (declare-function pdf-view-roll-minor-mode "pdf-roll")
+(declare-function file-notify-add-watch "filenotify")
+(declare-function file-notify-rm-watch "filenotify")
+(declare-function file-notify-valid-p "filenotify")
 
 ;;; Code:
 
@@ -186,6 +194,14 @@ on down, and when the talk is over."
   :group 'pdf-present
   :type 'number)
 
+(defcustom pdf-present-auto-reload t
+  "Reload the deck when its file changes while presenting.
+The file is watched; once it has settled after a change (LaTeX
+rebuilding it, say), it is read again and the slides re-detected,
+keeping the current slide and the timers.  nil watches nothing."
+  :group 'pdf-present
+  :type 'boolean)
+
 (defcustom pdf-present-start-hook nil
   "Hook run after a presentation has started.
 The PDF buffer is current."
@@ -244,6 +260,9 @@ The PDF buffer is current."
   ticker
   ;; The idle timer rendering coming slides in advance, or nil.
   prefetch
+  ;; The file-notify watch on the deck, and the timer debouncing
+  ;; reloading it.
+  watcher reload-timer
   audience-frame presenter-frame
   audience-window current-window next-window notes-window info-window
   ;; The grid buffer of the slide overview, when it is open.
@@ -857,6 +876,70 @@ and nil turns the prefetching off."
 
 
 ;; * ================================================================== *
+;; * Watching the file
+;; * ================================================================== *
+
+(defun pdf-present--watch-file (session)
+  "Have SESSION's deck watched for changes.
+Says so, and returns nil, where `file-notify' does not work."
+  (setf (pdf-present--session-watcher session)
+        (condition-case err
+            (file-notify-add-watch
+             (buffer-file-name (pdf-present--session-buffer session))
+             '(change)
+             (lambda (event) (pdf-present--file-changed session event)))
+          (error
+           (message "pdf-present: not watching the deck: %s"
+                    (error-message-string err))
+           nil))))
+
+(defun pdf-present--file-changed (session _event)
+  "Note that SESSION's file changed; reload it once it settles.
+A compiler rewriting the file makes many changes in a row, so
+wait a second after the last one."
+  (when (timerp (pdf-present--session-reload-timer session))
+    (cancel-timer (pdf-present--session-reload-timer session)))
+  (setf (pdf-present--session-reload-timer session)
+        (run-with-timer 1 nil #'pdf-present--reload session)))
+
+(defun pdf-present--reload (session)
+  "Read SESSION's PDF again and rebuild its slides.
+The file changed while presenting; the current slide, the blank
+screen and the timers are kept.  When the file cannot be read,
+say so and keep the old slides."
+  (setf (pdf-present--session-reload-timer session) nil)
+  (let ((buffer (pdf-present--session-buffer session)))
+    (when (buffer-live-p buffer)
+      (message "pdf-present: reloading the deck")
+      (condition-case err
+          (with-current-buffer buffer
+            (revert-buffer 'ignore-auto 'noconfirm)
+            (let ((detected (pdf-present--detect buffer)))
+              (setf (pdf-present--session-layout session) (car detected)
+                    (pdf-present--session-map session)
+                    (pdf-present--page-map
+                     (car detected) (pdf-cache-number-of-pages)
+                     (cdr detected))
+                    (pdf-present--session-labels session)
+                    (pdf-present--labels buffer (car detected))
+                    ;; Keep the slide, clamped to the new deck.
+                    (pdf-present--session-index session)
+                    (min (pdf-present--session-index session)
+                         (pdf-present--count session))))
+            (pdf-present--refresh session))
+        (error
+         (message "pdf-present: reload failed: %s"
+                  (error-message-string err))))
+      ;; A file replaced by renaming ends its watch; start another,
+      ;; so that the next recompilation reloads too.
+      (when (and pdf-present-auto-reload
+                 (not (file-notify-valid-p
+                       (pdf-present--session-watcher session))))
+        (pdf-present--watch-file session)))))
+
+
+
+;; * ================================================================== *
 ;; * Saving and restoring
 ;; * ================================================================== *
 
@@ -881,6 +964,8 @@ and nil turns the prefetching off."
       (pdf-view-roll-minor-mode -1))
     (setq pdf-view-display-size 'fit-page)
     (add-hook 'kill-buffer-hook #'pdf-present-quit nil t)
+    (when (and pdf-present-auto-reload (buffer-file-name))
+      (pdf-present--watch-file session))
     (pdf-present-mode 1)))
 
 (defun pdf-present--restore-buffer (session)
@@ -1187,6 +1272,10 @@ of the page shown in the selected window.
 
 Where the notes are is set by `pdf-present-notes-layout'.
 
+The deck is watched (see `pdf-present-auto-reload'): recompiling
+it while presenting reloads the slides, keeping the current one
+and the timers.
+
 Keys, in both frames:
 \\<pdf-present-mode-map>
 \\[pdf-present-next-slide], \\[pdf-present-previous-slide]	next, previous slide (also PageDown/PageUp, arrows)
@@ -1246,6 +1335,12 @@ windows back as they were."
               (cancel-timer (pdf-present--session-ticker session)))
             (when (timerp (pdf-present--session-prefetch session))
               (cancel-timer (pdf-present--session-prefetch session)))
+            (when (timerp (pdf-present--session-reload-timer session))
+              (cancel-timer (pdf-present--session-reload-timer session)))
+            (when (pdf-present--session-watcher session)
+              (ignore-errors
+                (file-notify-rm-watch
+                 (pdf-present--session-watcher session))))
             (remove-hook 'delete-frame-functions #'pdf-present--on-delete-frame)
             (remove-hook 'window-size-change-functions #'pdf-present--on-resize)
             (pdf-present--teardown-display session)

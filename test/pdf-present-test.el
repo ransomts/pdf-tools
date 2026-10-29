@@ -526,6 +526,45 @@ pages stale; `pdf-present--on-resize' prefetches them again."
       (should-not (pdf-present--session-overview s))
       (should (eq (window-buffer window) pdf)))))
 
+(ert-deftest pdf-present-reload ()
+  "A changed deck is read again, keeping slide and timer."
+  (let* ((deck (make-temp-file "present-reload" nil ".pdf"))
+         (plain (expand-file-name "present-plain.pdf"))
+         (notes (expand-file-name "present-notes-pages.pdf")))
+    (unwind-protect
+        (progn
+          (copy-file plain deck t)
+          (pdf-present-test-presenting deck
+            (pdf-present)
+            (pdf-present-next-slide)
+            (let ((s pdf-present--session))
+              ;; Pause and set the timer, so it survives the reload.
+              (pdf-present--timer-pause s)
+              (setf (pdf-present--session-elapsed s) 42.0)
+              ;; A change of the file schedules a reload, once the
+              ;; file has settled.
+              (pdf-present--file-changed s nil)
+              (should (timerp (pdf-present--session-reload-timer s)))
+              (cancel-timer (pdf-present--session-reload-timer s))
+              (setf (pdf-present--session-reload-timer s) nil)
+              ;; Overwrite the deck: five slides again, but with
+              ;; notes pages now.
+              (copy-file notes deck t)
+              (pdf-present--reload s)
+              (should (eq (pdf-present--session-layout s) 'notes-pages))
+              (should (= (pdf-present--session-index s) 2))
+              (should (= (pdf-present--session-elapsed s) 42.0))
+              (should (= (pdf-present--notes-page s) 4))
+              (with-current-buffer (pdf-present--session-buffer s)
+                (should (equal (pdf-present-test--state)
+                               '(:audience (3 nil) :current (3 nil)
+                                 :next (5 nil) :notes (4 nil)))))
+              ;; Quitting removes the file watch.
+              (let ((watcher (pdf-present--session-watcher s)))
+                (pdf-present-quit)
+                (should-not (file-notify-valid-p watcher))))))
+      (delete-file deck))))
+
 
 
 ;; * ================================================================== *
