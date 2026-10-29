@@ -34,8 +34,8 @@
 ;; a frame to fullscreen is slow, and Wayland compositors such as
 ;; COSMIC ignore it outright.  Each window is made in its final
 ;; size, so the slides render once, and while the presenter holds
-;; on a slide the next one is rendered in advance (see
-;; `pdf-present-prefetch-delay').  Where the window manager honors
+;; on a slide the coming ones are rendered in advance (see
+;; `pdf-present-prefetch-delay' and `pdf-present-prefetch-count').  Where the window manager honors
 ;; positions, the windows are put on their monitors; a compositor
 ;; that places windows itself — the tiling one in Pop!_OS, say —
 ;; can be told to float them on their outputs with its window
@@ -155,6 +155,17 @@ wait for them.  nil turns the prefetching off."
   :type '(choice (number :tag "Seconds of idle time")
                  (const :tag "Off" nil)))
 
+(defcustom pdf-present-prefetch-count 3
+  "How many slides beyond the current one to render in advance.
+While the presenter holds on a slide, the coming slides have their
+pages rendered into the cache, one slide every
+`pdf-present-prefetch-delay' seconds of idle time.  A slide needs
+up to four images and the cache holds `pdf-cache-image-limit' of
+them, so a count much beyond a quarter of that thrashes it;
+smaller counts mean one slide."
+  :group 'pdf-present
+  :type 'natnum)
+
 (defcustom pdf-present-start-hook nil
   "Hook run after a presentation has started.
 The PDF buffer is current."
@@ -209,7 +220,7 @@ The PDF buffer is current."
   running-since
   ;; The timer that updates the clock.
   ticker
-  ;; The idle timer rendering the next slide in advance, or nil.
+  ;; The idle timer rendering coming slides in advance, or nil.
   prefetch
   audience-frame presenter-frame
   audience-window current-window next-window notes-window info-window
@@ -732,52 +743,72 @@ MONITOR-SPEC is like `pdf-present-audience-monitor'."
 ;; * Prefetching
 ;; * ================================================================== *
 
-(defun pdf-present--next-pages (session)
-  "Return the (WINDOW . PAGE) pairs of SESSION's next slide change.
-These are the pages that the audience, current, next and notes
-windows will show after one more `pdf-present-next-slide', at the
-sizes they will show them.  nil on the last slide."
-  (let ((next (pdf-present--next-index session)))
-    (when next
-      (let ((pairs (list (cons (pdf-present--session-audience-window session)
-                               (pdf-present--slide-page session next))
-                         (cons (pdf-present--session-current-window session)
-                               (pdf-present--slide-page session next)))))
-        ;; The next window moves on to the slide after the next one.
-        (when-let* ((after (pdf-present--next-index session next)))
-          (push (cons (pdf-present--session-next-window session)
-                      (pdf-present--slide-page session after))
-                pairs))
-        ;; The notes window follows the next slide.
-        (when-let* ((window (pdf-present--session-notes-window session))
-                    (notes (pdf-present--notes-page session next)))
-          (push (cons window notes) pairs))
-        pairs))))
+(defun pdf-present--slide-pages (session index)
+  "Return the (WINDOW . PAGE) pairs shown on slide INDEX of SESSION.
+The audience and current windows show the slide's page, the notes
+window its notes page, and the next window the page of the slide
+after it; pairs without a page or a window are left out."
+  (let* ((slide (pdf-present--slide-page session index))
+         (pairs (list (cons (pdf-present--session-audience-window session)
+                            slide)
+                     (cons (pdf-present--session-current-window session)
+                           slide))))
+    ;; The notes window shows the slide's notes page.
+    (when-let* ((window (pdf-present--session-notes-window session))
+                (notes (pdf-present--notes-page session index)))
+      (push (cons window notes) pairs))
+    ;; The next window shows the slide after this one.
+    (when-let* ((window (pdf-present--session-next-window session))
+                (after (pdf-present--next-index session index)))
+      (push (cons window (pdf-present--slide-page session after)) pairs))
+    pairs))
 
-(defun pdf-present--prefetch (session)
-  "Render the pages of SESSION's next slide into the cache.
+(defun pdf-present--prefetch (session index)
+  "Render the pages slide INDEX of SESSION will show into the cache.
 Each page is rendered as its window would show it, so that moving
-to the next slide finds it there and only has to display it."
+to the slide finds it there and only has to display it.  One slide
+is rendered per call; while Emacs stays idle, another follows every
+`pdf-present-prefetch-delay' seconds, until
+`pdf-present-prefetch-count' slides beyond the current one are
+cached."
   (setf (pdf-present--session-prefetch session) nil)
-  (let ((buffer (pdf-present--session-buffer session)))
-    (when (buffer-live-p buffer)
+  (let* ((current (pdf-present--session-index session))
+         (horizon (+ current (max 1 (or pdf-present-prefetch-count 1))))
+         (after (pdf-present--next-index session index))
+         (buffer (pdf-present--session-buffer session)))
+    ;; The presenter may have moved since this was scheduled; the
+    ;; pages are stale then, and a fresh prefetch is on its way.
+    (when (and (> index current)
+               (<= index horizon)
+               (buffer-live-p buffer))
       (with-current-buffer buffer
-        (dolist (pair (pdf-present--next-pages session))
+        (dolist (pair (pdf-present--slide-pages session index))
           (when (window-live-p (car pair))
             ;; `pdf-view-create-page' renders the page, or finds it in
             ;; the cache, without displaying anything.
             (ignore-errors
-              (pdf-view-create-page (cdr pair) (car pair)))))))))
+              (pdf-view-create-page (cdr pair) (car pair)))))))
+    ;; Chain to the following slide.
+    (when (and after
+               pdf-present-prefetch-delay
+               (> after current)
+               (<= after horizon))
+      (setf (pdf-present--session-prefetch session)
+            (run-with-idle-timer pdf-present-prefetch-delay nil
+                                 #'pdf-present--prefetch session after)))))
 
 (defun pdf-present--schedule-prefetch (session)
-  "Render SESSION's next slide when Emacs is idle.
-`pdf-present-prefetch-delay' says when, and nil turns it off."
+  "Render SESSION's coming slides when Emacs is idle.
+`pdf-present-prefetch-delay' says when each slide is rendered,
+and nil turns the prefetching off."
   (when (timerp (pdf-present--session-prefetch session))
     (cancel-timer (pdf-present--session-prefetch session)))
-  (setf (pdf-present--session-prefetch session)
-        (and pdf-present-prefetch-delay
-             (run-with-idle-timer pdf-present-prefetch-delay nil
-                                  #'pdf-present--prefetch session))))
+  (let ((next (and pdf-present-prefetch-delay
+                  (pdf-present--next-index session))))
+    (setf (pdf-present--session-prefetch session)
+          (and next
+               (run-with-idle-timer pdf-present-prefetch-delay nil
+                                    #'pdf-present--prefetch session next)))))
 
 
 
