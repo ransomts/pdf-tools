@@ -20,19 +20,32 @@
 
 ;;; Commentary:
 ;;
-;; `pdf-present' turns the PDF in the current buffer into a slide show
-;; with two frames:
+;; `pdf-present' turns the PDF in the current buffer into a slide
+;; show with two windows on the desktop:
 ;;
-;; - the audience frame shows the current slide alone, full screen, on
+;; - the audience window shows the current slide alone, covering
 ;;   another monitor (the projector);
 ;;
-;; - the presenter frame shows the current slide, the next slide, the
-;;   speaker notes, the slide counter, the elapsed time and the clock.
+;; - the presenter window shows the current slide, the next slide,
+;;   the speaker notes, the slide counter, the elapsed time and
+;;   the clock.
 ;;
-;; Both frames use the same `pdf-view-mode' buffer; every window shows
-;; its own page (and slice) of it, so pdf-tools does all the rendering.
-;; The frames always show the same slide: all navigation goes through
-;; one session object, which then updates every window.
+;; Both are plain windows rather than fullscreen frames: switching
+;; a frame to fullscreen is slow, and Wayland compositors such as
+;; COSMIC ignore it outright.  Each window is made in its final
+;; size, so the slides render once, and while the presenter holds
+;; on a slide the next one is rendered in advance (see
+;; `pdf-present-prefetch-delay').  Where the window manager honors
+;; positions, the windows are put on their monitors; a compositor
+;; that places windows itself — the tiling one in Pop!_OS, say —
+;; can be told to float them on their outputs with its window
+;; rules for "PDF Audience" and "PDF Presenter".
+;;
+;; Both windows use the same `pdf-view-mode' buffer; every window
+;; shows its own page (and slice) of it, so pdf-tools does all the
+;; rendering.  The windows always show the same slide: all
+;; navigation goes through one session object, which then updates
+;; every window.
 ;;
 ;; Speaker notes come from the PDF itself.  Three layouts are known (see
 ;; `pdf-present-notes-layout'):
@@ -117,7 +130,11 @@ is `auto'."
 nil means the first monitor that the presenter frame is not on.
 An integer is a position in `display-monitor-attributes-list'
 \(counting from 0); a string is a monitor name such as \"HDMI-1\".
-With a prefix argument, `pdf-present' asks."
+With a prefix argument, `pdf-present' asks.
+
+Window managers that let a program place its windows put the
+frame on this monitor; Wayland compositors place it themselves and
+keep only its size."
   :group 'pdf-present
   :type '(choice (const :tag "Another monitor than the presenter's" nil)
                  (integer :tag "Monitor number")
@@ -128,6 +145,15 @@ With a prefix argument, `pdf-present' asks."
 See `format-time-string'."
   :group 'pdf-present
   :type 'string)
+
+(defcustom pdf-present-prefetch-delay 0.5
+  "Seconds of idle time before the next slide is rendered.
+While a slide is held, the pages that the next one will put on
+screen are rendered into the cache, so that moving on does not
+wait for them.  nil turns the prefetching off."
+  :group 'pdf-present
+  :type '(choice (number :tag "Seconds of idle time")
+                 (const :tag "Off" nil)))
 
 (defcustom pdf-present-start-hook nil
   "Hook run after a presentation has started.
@@ -183,6 +209,8 @@ The PDF buffer is current."
   running-since
   ;; The timer that updates the clock.
   ticker
+  ;; The idle timer rendering the next slide in advance, or nil.
+  prefetch
   audience-frame presenter-frame
   audience-window current-window next-window notes-window info-window
   ;; Where `pdf-present' was called, and what to restore on quit.
@@ -209,9 +237,10 @@ INDEX defaults to the current slide of SESSION."
   (cdr (aref (pdf-present--session-map session)
              (1- (or index (pdf-present--session-index session))))))
 
-(defun pdf-present--next-index (session)
-  "Return the index of the slide after the current one of SESSION, or nil."
-  (let ((next (1+ (pdf-present--session-index session))))
+(defun pdf-present--next-index (session &optional index)
+  "Return the index of the slide after INDEX in SESSION, or nil.
+INDEX defaults to the current slide."
+  (let ((next (1+ (or index (pdf-present--session-index session)))))
     (and (<= next (pdf-present--count session)) next)))
 
 (defun pdf-present--index-of-page (session page)
@@ -572,7 +601,9 @@ This is the only place that puts a PDF page on the screen."
           (pdf-present--show-page window notes
                                   (pdf-present--slice layout 'notes))
         (pdf-present--show-buffer window empty)))
-    (pdf-present--update-info session)))
+    (pdf-present--update-info session)
+    ;; While the slide is held, render the next one in the background.
+    (pdf-present--schedule-prefetch session)))
 
 (defun pdf-present--decorate (window &optional label)
   "Remove the mode line of WINDOW; give it header LABEL if non-nil."
@@ -581,24 +612,51 @@ This is the only place that puts a PDF page on the screen."
                         (if label (propertize label 'face 'pdf-present-label)
                           'none)))
 
-(defun pdf-present--make-frame (name monitor fullscreen &optional parameters)
-  "Make frame NAME on MONITOR with PARAMETERS.
-FULLSCREEN non-nil makes it cover the monitor."
-  (let* ((geometry (alist-get 'geometry monitor))
-         (frame (make-frame
-                 (append parameters
-                         `((name . ,name)
-                           (left . ,(nth 0 geometry))
-                           (top . ,(nth 1 geometry))
-                           (user-position . t)
-                           (menu-bar-lines . 0)
-                           (tool-bar-lines . 0)
-                           (tab-bar-lines . 0)
-                           (vertical-scroll-bars . nil)
-                           (horizontal-scroll-bars . nil))))))
-    (when fullscreen
-      (set-frame-parameter frame 'fullscreen 'fullboth))
-    frame))
+(defun pdf-present--make-frame (name rectangle &optional parameters)
+  "Make an undecorated frame NAME exactly covering RECTANGLE.
+RECTANGLE is a list (X Y WIDTH HEIGHT) of pixels, such as the
+`geometry' or `workarea' of a monitor in
+`display-monitor-attributes-list'.  PARAMETERS are more frame
+parameters for `make-frame'.
+
+The frame never goes fullscreen: switching a frame to fullscreen
+is slow, and Wayland compositors such as COSMIC ignore it.  It is
+born in its final size instead, with no menu, tool or tab bars,
+fringes, borders or scroll bars, so that it covers RECTANGLE
+exactly.  Window managers that honor positions put it there; those
+that place windows themselves (all Wayland compositors) keep only
+its size, and a tiling one tiles it."
+  (let ((frame-resize-pixelwise t))
+    (make-frame
+     (append parameters
+             `((name . ,name)
+               (left . ,(nth 0 rectangle))
+               (top . ,(nth 1 rectangle))
+               (user-position . t)
+               (undecorated . t)
+               (menu-bar-lines . 0)
+               (tool-bar-lines . 0)
+               (tab-bar-lines . 0)
+               (vertical-scroll-bars . nil)
+               (horizontal-scroll-bars . nil)
+               (left-fringe . 0)
+               (right-fringe . 0)
+               (internal-border-width . 0)
+               (width . (text-pixels . ,(nth 2 rectangle)))
+               (height . (text-pixels . ,(nth 3 rectangle))))))))
+
+(defun pdf-present--audience-rectangle (monitor one-monitor)
+  "Return the audience frame's rectangle (X Y WIDTH HEIGHT).
+MONITOR is the audience monitor's attributes, as
+`display-monitor-attributes-list' returns them.  With ONE-MONITOR
+non-nil, the presentation shares the monitor with the presenter,
+and the audience frame takes a quarter of its workarea instead of
+the whole monitor."
+  (if one-monitor
+      (let ((workarea (alist-get 'workarea monitor)))
+        (list (nth 0 workarea) (nth 1 workarea)
+              (/ (nth 2 workarea) 2) (/ (nth 3 workarea) 2)))
+    (alist-get 'geometry monitor)))
 
 (defun pdf-present--setup-display (session monitor-spec)
   "Make the frames and windows of SESSION.
@@ -608,56 +666,55 @@ MONITOR-SPEC is like `pdf-present-audience-monitor'."
                             (display-monitor-attributes-list)
                             presenter-monitor monitor-spec))
          (one-monitor (equal (alist-get 'geometry audience-monitor)
-                             (alist-get 'geometry presenter-monitor)))
-         (presenter (pdf-present--make-frame
-                     "PDF Presenter" presenter-monitor (not one-monitor)))
-         (audience
-          (pdf-present--make-frame
-           "PDF Audience" audience-monitor (not one-monitor)
-           `((minibuffer . ,(minibuffer-window presenter))
-             (background-color . "black")
-             (left-fringe . 0) (right-fringe . 0)
-             (internal-border-width . 0)
-             (undecorated . ,(not one-monitor))
-             (unsplittable . t)
-             ,@(when one-monitor
-                 (let ((geometry (alist-get 'workarea audience-monitor)))
-                   `((width . (text-pixels . ,(/ (nth 2 geometry) 2)))
-                     (height . (text-pixels . ,(/ (nth 3 geometry) 2))))))))))
+                             (alist-get 'geometry presenter-monitor))))
     (when one-monitor
-      (set-frame-parameter presenter 'fullscreen 'maximized)
-      (message "Only one monitor: the audience frame is a normal window"))
-    (setf (pdf-present--session-presenter-frame session) presenter
-          (pdf-present--session-audience-frame session) audience)
-    ;; Audience: one window, nothing but the slide.
-    (let ((window (frame-root-window audience)))
-      (pdf-present--decorate window)
-      (setf (pdf-present--session-audience-window session) window))
-    ;; Presenter: current | notes over next | info, or without notes
-    ;; current | next over info.
-    (let* ((current (frame-root-window presenter))
-           (info (split-window current
-                               (floor (* 0.62 (window-total-height current)))
-                               'below))
-           (notes-p (not (eq (pdf-present--session-layout session) 'none)))
-           (right (split-window current
-                                (when notes-p
-                                  (floor (* 0.5 (window-total-width current))))
-                                'right))
-           (next (if notes-p
-                     (split-window info nil 'left)
-                   right)))
-      (pdf-present--decorate current " Current slide")
-      (pdf-present--decorate next " Next slide")
-      (pdf-present--decorate info)
-      (when notes-p (pdf-present--decorate right " Notes"))
-      (set-window-buffer info (pdf-present--text-buffer "*pdf-present-info*"))
-      (setf (pdf-present--session-current-window session) current
-            (pdf-present--session-next-window session) next
-            (pdf-present--session-notes-window session) (and notes-p right)
-            (pdf-present--session-info-window session) info)
-      (select-window current))
-    (select-frame-set-input-focus presenter)))
+      (message "Only one monitor: the audience window takes a quarter of it"))
+    ;; Make and split everything before any page is displayed, so
+    ;; that none renders twice while the windows settle: pages are
+    ;; displayed by `pdf-present--refresh', which `pdf-present'
+    ;; calls after this, when every window has its final size.
+    (let* ((pdf-view-inhibit-redisplay t)
+           (presenter (pdf-present--make-frame
+                       "PDF Presenter"
+                       (alist-get 'workarea presenter-monitor)))
+           (audience (pdf-present--make-frame
+                      "PDF Audience"
+                      (pdf-present--audience-rectangle
+                       audience-monitor one-monitor)
+                      `((minibuffer . ,(minibuffer-window presenter))
+                        (background-color . "black")
+                        (unsplittable . t)))))
+      (setf (pdf-present--session-presenter-frame session) presenter
+            (pdf-present--session-audience-frame session) audience)
+      ;; Audience: one window, nothing but the slide.
+      (let ((window (frame-root-window audience)))
+        (pdf-present--decorate window)
+        (setf (pdf-present--session-audience-window session) window))
+      ;; Presenter: current | notes over next | info, or without notes
+      ;; current | next over info.
+      (let* ((current (frame-root-window presenter))
+             (info (split-window current
+                                 (floor (* 0.62 (window-total-height current)))
+                                 'below))
+             (notes-p (not (eq (pdf-present--session-layout session) 'none)))
+             (right (split-window current
+                                  (when notes-p
+                                    (floor (* 0.5 (window-total-width current))))
+                                  'right))
+             (next (if notes-p
+                       (split-window info nil 'left)
+                     right)))
+        (pdf-present--decorate current " Current slide")
+        (pdf-present--decorate next " Next slide")
+        (pdf-present--decorate info)
+        (when notes-p (pdf-present--decorate right " Notes"))
+        (set-window-buffer info (pdf-present--text-buffer "*pdf-present-info*"))
+        (setf (pdf-present--session-current-window session) current
+              (pdf-present--session-next-window session) next
+              (pdf-present--session-notes-window session) (and notes-p right)
+              (pdf-present--session-info-window session) info)
+        (select-window current))
+      (select-frame-set-input-focus presenter))))
 
 (defun pdf-present--teardown-display (session)
   "Delete the frames of SESSION and kill the helper buffers."
@@ -668,6 +725,59 @@ MONITOR-SPEC is like `pdf-present-audience-monitor'."
   (dolist (name pdf-present--buffer-names)
     (when (get-buffer name)
       (kill-buffer name))))
+
+
+
+;; * ================================================================== *
+;; * Prefetching
+;; * ================================================================== *
+
+(defun pdf-present--next-pages (session)
+  "Return the (WINDOW . PAGE) pairs of SESSION's next slide change.
+These are the pages that the audience, current, next and notes
+windows will show after one more `pdf-present-next-slide', at the
+sizes they will show them.  nil on the last slide."
+  (let ((next (pdf-present--next-index session)))
+    (when next
+      (let ((pairs (list (cons (pdf-present--session-audience-window session)
+                               (pdf-present--slide-page session next))
+                         (cons (pdf-present--session-current-window session)
+                               (pdf-present--slide-page session next)))))
+        ;; The next window moves on to the slide after the next one.
+        (when-let* ((after (pdf-present--next-index session next)))
+          (push (cons (pdf-present--session-next-window session)
+                      (pdf-present--slide-page session after))
+                pairs))
+        ;; The notes window follows the next slide.
+        (when-let* ((window (pdf-present--session-notes-window session))
+                    (notes (pdf-present--notes-page session next)))
+          (push (cons window notes) pairs))
+        pairs))))
+
+(defun pdf-present--prefetch (session)
+  "Render the pages of SESSION's next slide into the cache.
+Each page is rendered as its window would show it, so that moving
+to the next slide finds it there and only has to display it."
+  (setf (pdf-present--session-prefetch session) nil)
+  (let ((buffer (pdf-present--session-buffer session)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (dolist (pair (pdf-present--next-pages session))
+          (when (window-live-p (car pair))
+            ;; `pdf-view-create-page' renders the page, or finds it in
+            ;; the cache, without displaying anything.
+            (ignore-errors
+              (pdf-view-create-page (cdr pair) (car pair)))))))))
+
+(defun pdf-present--schedule-prefetch (session)
+  "Render SESSION's next slide when Emacs is idle.
+`pdf-present-prefetch-delay' says when, and nil turns it off."
+  (when (timerp (pdf-present--session-prefetch session))
+    (cancel-timer (pdf-present--session-prefetch session)))
+  (setf (pdf-present--session-prefetch session)
+        (and pdf-present-prefetch-delay
+             (run-with-idle-timer pdf-present-prefetch-delay nil
+                                  #'pdf-present--prefetch session))))
 
 
 
@@ -750,9 +860,15 @@ MONITOR-SPEC is like `pdf-present-audience-monitor'."
 (defun pdf-present--on-resize (_frame)
   "Fit the slides again after a presentation window changed size."
   (let ((session pdf-present--session))
-    (when (and session (buffer-live-p (pdf-present--session-buffer session)))
+    (when (and session
+               (not (pdf-present--session-quitting session))
+               (buffer-live-p (pdf-present--session-buffer session)))
       (with-current-buffer (pdf-present--session-buffer session)
-        (pdf-view-maybe-redisplay-resized-windows)))))
+        (pdf-view-maybe-redisplay-resized-windows))
+      ;; The window manager (a tiling compositor, say) may resize
+      ;; the presentation windows at any time; whatever was
+      ;; prefetched for the old sizes is stale now.
+      (pdf-present--schedule-prefetch session))))
 
 
 
@@ -874,13 +990,14 @@ Showing a slide ends a black or white screen."
 (defun pdf-present (&optional choose-monitor)
   "Present the PDF in the current buffer.
 
-Opens an audience frame with the current slide alone, full
-screen on another monitor (see `pdf-present-audience-monitor'),
-and a presenter frame with the current and next slides, the
-speaker notes, the slide counter, the elapsed time and the
-clock.  With prefix argument CHOOSE-MONITOR, ask which monitor
-the audience sees.  The presentation starts at the slide of the
-page shown in the selected window.
+Opens an audience window with the current slide alone, covering
+another monitor (see `pdf-present-audience-monitor'), and a
+presenter window with the current and next slides, the speaker
+notes, the slide counter, the elapsed time and the clock.  Both
+are plain windows, made in their final size, rather than
+fullscreen frames.  With prefix argument CHOOSE-MONITOR, ask which
+monitor the audience sees.  The presentation starts at the slide
+of the page shown in the selected window.
 
 Where the notes are is set by `pdf-present-notes-layout'.
 
@@ -939,6 +1056,8 @@ windows back as they were."
           (progn
             (when (timerp (pdf-present--session-ticker session))
               (cancel-timer (pdf-present--session-ticker session)))
+            (when (timerp (pdf-present--session-prefetch session))
+              (cancel-timer (pdf-present--session-prefetch session)))
             (remove-hook 'delete-frame-functions #'pdf-present--on-delete-frame)
             (remove-hook 'window-size-change-functions #'pdf-present--on-resize)
             (pdf-present--teardown-display session)
