@@ -118,12 +118,18 @@ The fields you can interact with are marked on the page;
     (message "Filling in forms is not supported by this version of epdfinfo"))
    (pdf-form-minor-mode
     (pdf-view-add-hotspot-function 'pdf-form-hotspots-function 5)
+    ;; Widget annotations are form fields; activating one, e.g. from
+    ;; the annotation list, should edit the field, not its comment.
+    (add-hook 'pdf-annot-activate-handler-functions
+              #'pdf-form-activate-widget nil t)
     ;; Never removed when a buffer turns the mode off: the advice
     ;; applies to every buffer, while `pdf-form-minor-mode' below says
     ;; which ones mark their fields.
     (advice-add 'pdf-view-create-page :around #'pdf-form--create-page))
    (t
-    (pdf-view-remove-hotspot-function 'pdf-form-hotspots-function)))
+    (pdf-view-remove-hotspot-function 'pdf-form-hotspots-function)
+    (remove-hook 'pdf-annot-activate-handler-functions
+                 #'pdf-form-activate-widget t)))
   (pdf-view-redisplay t))
 
 (defun pdf-form-fillable-p (field)
@@ -401,6 +407,33 @@ Show the validity of a signature field's signature instead."
         ;; Remove the highlight, if the user quit.
         (unless done
           (pdf-view-redisplay-pages (alist-get 'page field))))))))
+
+(defun pdf-form--field-at-edges (page edges)
+  "Return the form field on PAGE drawn with the relative EDGES.
+
+Both the fields and the annotations of a form come from the same
+rectangles in the document, so the edges of a widget annotation
+are the edges of its field."
+  (cl-find-if (lambda (field)
+                (let ((e (alist-get 'edges field)))
+                  (and e (cl-every (lambda (a b) (< (abs (- a b)) 0.001))
+                                   edges e))))
+              (pdf-cache-formfields page)))
+
+(defun pdf-form-activate-widget (a)
+  "Fill in, sign or validate the form field that annotation A draws.
+
+Return non-nil if A is a widget annotation, so that
+`pdf-annot-activate-handler-functions' stops there: a widget has no
+contents of its own worth editing.  `pdf-form-minor-mode' puts this
+on that hook buffer-locally; clicking a field normally reaches
+`pdf-form-edit-field' directly through the field's own hotspot."
+  (when (eq (pdf-annot-get a 'type) 'widget)
+    (let ((field (pdf-form--field-at-edges (pdf-annot-get a 'page)
+                                           (pdf-annot-get a 'edges))))
+      (when field
+        (pdf-form-edit-field field)))
+    t))
 
 (defun pdf-form-set-field (field value)
   "Set FIELD to VALUE and redisplay its page.
