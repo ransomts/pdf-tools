@@ -71,9 +71,15 @@
   + ~T~ shows every slide as a thumbnail grid (the pdf-thumbs one) in the current-slide window; the audience keeps seeing the current slide, and picking a thumbnail, with ~RET~ or a click, jumps the presentation to it.
   + The deck's file is watched (~pdf-present-auto-reload~): when LaTeX rewrites it while presenting, it is read again and the slides re-detected once the file has settled, keeping the current slide and the timers.
   + Keys in both windows: ~n~ / ~p~ (also PageDown/PageUp and the arrow keys that clickers send), ~<~ / ~>~, ~g~ to go to a slide, ~b~ / ~w~ for a black or white screen, ~d~ for the talk length, ~t~ / ~r~ to pause or reset the timer, ~q~ to quit and restore the buffer, windows and frames.
+- Export and import annotations as XFDF, the annotation exchange format of Adobe and other PDF editors
+  + ~M-x pdf-xfdf-export~ writes the annotations of the visited PDF to an XFDF file (default: the PDF's name with ~.xfdf~); ~M-x pdf-xfdf-import~ reads them back into the visited PDF.
+  + Use it to move annotations between copies of a document: grade one copy of an exam and send the XFDF file along with the blank original, rather than a modified PDF; other editors, e.g. Okular and Foxit, read the file too.
+  + The type, page, rectangle, color, opacity, contents, author, subject, the marked-up text regions of markup annotations, the icon of text and stamp annotations, the interior color of squares and circles, and the popup rectangle and state survive a round trip.  Ink annotations are not exported (poppler cannot read their strokes back), and the vertices of a line are approximated by the corners of its rectangle.
+  + New module ~pdf-xfdf.el~ with the options ~pdf-xfdf-export-types~ and ~pdf-xfdf-author~.
 
 ** Functionality improvements and fixes
 - Annotation colors no longer get slightly darker each time a document is saved and reopened.
+- The ~popup~ property of markup annotations, which ~pdf-info-editannot~ now serializes correctly, positions a popup at relative edges as everywhere else.
 - Fix: A mouse click no longer activates an empty region #342
   + ~pdf-view-active-region-p~ was true after any click in the page, even without a selection. A click now only deselects, and ~C-mouse-1~ again adds to the active region instead of replacing it.
 - Fix: A mouse click no longer activates an empty region #342
