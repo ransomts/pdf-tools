@@ -306,6 +306,61 @@
       (should-error (pdf-info-editannot id '((icon . "Draft"))))
       (should-error (pdf-info-editannot id '((label . "Joe")))))))
 
+(ert-deftest pdf-info-addannot-image-stamp ()
+  (skip-unless (pdf-info-image-stamps-p))
+  (pdf-test-with-test-pdf
+    (let* ((edges '(0.25 0.25 0.5 0.3))
+           (image (expand-file-name "signature.png"))
+           (a (pdf-info-addannot 1 edges 'stamp nil nil
+                                (concat "image:" image)))
+           (id (cdr (assq 'id a))))
+      (should (eq 'stamp (cdr (assq 'type a))))
+      (should (pdf-info-test--edges-equal edges (cdr (assq 'edges a))))
+      ;; The image is not an icon, and stamps are no markup
+      ;; annotations for epdfinfo.
+      (should (null (cdr (assq 'icon a))))
+      (should-not (assq 'label a))
+      ;; The annotation can be moved and deleted like any stamp.
+      (should (pdf-info-test--edges-equal
+               '(0.3 0.3 0.55 0.35)
+               (cdr (assq 'edges (pdf-info-mvannot id '(0.3 0.3 0.55 0.35))))))
+      (should (null (pdf-info-delannot id))))
+    ;; The image is checked before anything is added.
+    (should-error (pdf-info-addannot 1 '(0 0 0.5 0.1) 'stamp nil nil
+                                     "image:/no/such/image.png"))
+    (should-error (pdf-info-addannot
+                   1 '(0 0 0.5 0.1) 'stamp nil nil
+                   (concat "image:" (expand-file-name "test.pdf"))))))
+
+(ert-deftest pdf-info-save-image-stamp ()
+  (skip-unless (pdf-info-image-stamps-p))
+  (pdf-test-with-test-pdf
+    (let ((image (expand-file-name "signature.png"))
+          saved)
+      (pdf-info-addannot 1 '(0.25 0.25 0.5 0.3) 'stamp nil nil
+                         (concat "image:" image))
+      ;; Moving the stamp keeps its image.
+      (let ((id (cdr (assq 'id (car (pdf-info-getannots 1))))))
+        (pdf-info-mvannot id '(0.3 0.3 0.55 0.35)))
+      (unwind-protect
+          (progn
+            (setq saved (pdf-info-save))
+            ;; The stamp and its image appearance are written to the
+            ;; file and read back.
+            (should (cl-some
+                     (lambda (a)
+                       (and (eq 'stamp (cdr (assq 'type a)))
+                            (null (cdr (assq 'icon a)))))
+                     (pdf-info-getannots 1 saved)))
+            (with-temp-buffer
+              (set-buffer-multibyte nil)
+              (insert-file-contents-literally saved)
+              (goto-char (point-min))
+              ;; The appearance of the image survived the move.
+              (should (search-forward "/AP" nil t))))
+        (when (file-exists-p saved)
+          (delete-file saved))))))
+
 (ert-deftest pdf-info-save-shape-annotations ()
   (skip-unless (and (pdf-info-shape-annotations-p)
                     (pdf-info-stamp-annotations-p)))
