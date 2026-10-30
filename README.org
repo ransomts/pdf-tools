@@ -242,7 +242,7 @@ This also applies when updating via MELPA / NonGNU ELPA (except for running the 
 + Layers :: List the layers (optional content groups) of CAD drawings, maps or exams as a tree and show or hide them (=M-x pdf-layers=, =C-c C-l=). This is view state: it is not saved to the file, and reverting the buffer resets it.
 + SyncTeX :: Jump from a position on a page directly to the TeX source and vice versa.
 + Virtual :: Use a collection of documents as if it were one, big single PDF.
-+ Pages :: Delete, extract, move and rotate pages, and insert pages of other PDFs, changing the file itself (needs the =qpdf= program). [[id:7740dc50-5c1c-4d94-b896-264066d06efa][More information here]].
++ Pages :: Delete, extract, move and rotate pages, insert pages of other PDFs, and flatten annotations and form fields, changing the file itself (needs the =qpdf= program). [[id:7740dc50-5c1c-4d94-b896-264066d06efa][More information here]].
 + Reflow :: Read the text of a PDF reflowed in reading order in a text buffer (=M-x pdf-reflow=), for a narrow window, a large font or a screen reader: a tagged PDF with its headings, lists, tables and the alternative text of figures, other PDFs page by page.  Every block shows its place in the PDF.
 + Accessibility :: Review a tagged PDF for what a conformance checker cannot judge (=M-x pdf-a11y-report=): figures and their alt text, the heading outline, the reading order of each page, untagged pages, language and fonts that are not embedded.
 + Present :: Give a talk from a PDF (=M-x pdf-present=): the slide alone on the projector, and a presenter view with the next slide, speaker notes from Beamer, a timer and the clock. [[id:0c1d7f3e-5b8a-4e52-9a51-2f6c3e7d8b41][More information here]].
@@ -412,15 +412,26 @@ You can customize the appearance with:
 :PROPERTIES:
 :ID:       7740dc50-5c1c-4d94-b896-264066d06efa
 :END:
-~pdf-pages-minor-mode~ changes the pages of the visited PDF file: delete pages from a scan, extract a few pages into a new file, move pages, rotate sideways pages, or insert another PDF (for example to assemble an exam). Poppler cannot rewrite a document's page tree, so these commands use the [[https://qpdf.sourceforge.io/][qpdf]] command line program, version 8.4 or later. Install it, or point ~pdf-pages-qpdf-program~ at it.
+~pdf-pages-minor-mode~ changes the pages of the visited PDF file: delete pages from a scan, extract a few pages into a new file, move pages, rotate sideways pages, insert another PDF (for example to assemble an exam), or flatten the annotations and form fields of the document. Poppler cannot rewrite a document's page tree or push annotations into a page's contents, so these commands use the [[https://qpdf.sourceforge.io/][qpdf]] command line program, version 8.4 or later (11.8 or later for flattening). Install it, or point ~pdf-pages-qpdf-program~ at it.
 
 The commands work on the current page. A numeric prefix argument /N/ selects /N/ pages starting at the current one, and ~C-u~ asks for a page range in qpdf syntax, e.g. =3-5,8,10-z= (=z= is the last page).
 
 - A buffer with unsaved annotations or form fields is never changed: you are offered to save it first.
 - qpdf writes a new file next to the original, which replaces it only if qpdf succeeded and the result has the expected number of pages; a failure leaves the file as it was.
 - ~pdf-pages-undo~ restores the version before the last operation (up to ~pdf-pages-undo-limit~ of them in one Emacs session).
-- Deleting pages and undoing ask for confirmation, see ~pdf-pages-confirm~.
+- Deleting pages, undoing and flattening ask for confirmation, see ~pdf-pages-confirm~.
 - Encrypted files keep their encryption. qpdf gets the password from the password cache the viewer uses, or asks for it.
+
+*** Flattening annotations and form fields
+:PROPERTIES:
+:ID:       e3a7c2f1-9b4d-4e58-a1c6-7f0b2d84c911
+:END:
+
+~pdf-pages-flatten-annotations~ (~C-c C-o f~) pushes the annotations of the document into the contents of their pages, and the values of filled-in form fields into their appearances on the page: the document then looks the same in every PDF viewer, and its annotations and fields can no longer be edited, moved or replied to. Use it before returning a graded or filled-in document to readers with other PDF viewers.
+
+The qpdf program, which does the work, flattens an annotation only if it has an appearance stream. This holds for form fields and for the annotations of most other PDF editors, but not for annotations without one, which this package creates: those stay interactive, as every viewer draws them anyway. Hyperlinks are preserved. A file attachment is replaced by the drawing of its icon, so save attached files first (with ~pdf-annot-attachment-dired~). Form fields whose appearance is out of date with their value are left interactive instead of being flattened, unless qpdf regenerates the appearance for them; see ~pdf-pages-flatten-generate-appearances~ for what that involves.
+
+The previous version of the file is kept and can be restored with ~pdf-pages-undo~.
 
 *** Keybindings for page operations
 :PROPERTIES:
@@ -435,6 +446,7 @@ The commands work on the current page. A numeric prefix argument /N/ selects /N/
 | Rotate page(s) counterclockwise       | ~C-c C-o l~ |
 | Insert pages of a PDF after this page | ~C-c C-o i~ |
 | Append pages of a PDF                 | ~C-c C-o a~ |
+| Flatten annotations and form fields    | ~C-c C-o f~ |
 | Undo the last page operation          | ~C-c C-o u~ |
 
 The prefix is ~pdf-pages-minor-mode-map-prefix~.

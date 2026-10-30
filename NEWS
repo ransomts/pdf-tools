@@ -16,6 +16,7 @@
   + Works on the current page, /N/ pages with a numeric prefix argument, or a qpdf page range such as =3-5,8,10-z= with ~C-u~.
   + Uses the =qpdf= program (8.4 or later), see ~pdf-pages-qpdf-program~.
   + Refuses to touch a buffer with unsaved changes, replaces the file only after qpdf succeeded, and keeps previous versions for ~pdf-pages-undo~ (~C-c C-o u~).
+- Flatten annotations and form fields with ~pdf-pages-flatten-annotations~ (~C-c C-o f~), so that filled-in forms and documents annotated with other editors look the same in every PDF viewer.  Filled-in form field values become part of the page; annotations without an appearance stream (which this package creates) stay interactive, hyperlinks are preserved, and a file attachment is replaced by the drawing of its icon.  Form field appearances can be regenerated while flattening, see ~pdf-pages-flatten-generate-appearances~; needs =qpdf= 11.8 or later.  The previous version is kept for ~pdf-pages-undo~.
 - Add ~pdf-thumbs~ (~T~), a grid of page thumbnails
   + The grid reflows to the window width, labels each thumbnail with its page label, and highlights the current page. ~RET~ or a click shows a page.
   + Thumbnails render asynchronously, those in view first, so long documents open at once. They follow ~pdf-view-midnight-minor-mode~.
