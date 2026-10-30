@@ -554,3 +554,49 @@ The database has the password PASSWORD, if it is non-nil."
                               (buffer-string)))
       (should (string-match-p "approval (page 1)\n  Signature: +unsigned"
                               (buffer-string))))))
+
+(defmacro pdf-form-test-with-image-signing (fixture &rest body)
+  "Run BODY visiting a copy of FIXTURE, ready for image signing."
+  (declare (indent 1) (debug t))
+  `(progn
+     (skip-unless (pdf-info-image-stamps-p))
+     (skip-unless (and (executable-find pdf-pages-qpdf-program)
+                       (ignore-errors (pdf-pages--qpdf-version-at-least
+                                       '(11 8)))))
+     (let* ((pdf-form-test-dir (make-temp-file "pdf-form-test" t))
+            (file (expand-file-name ,fixture pdf-form-test-dir))
+            (pdf-pages--undo-alist nil)
+            (pdf-pages-confirm nil)
+            (pdf-pages-backup-directory
+             (expand-file-name "backups" pdf-form-test-dir)))
+       (copy-file ,fixture file)
+       (unwind-protect
+           (pdf-test-with-pdf file
+             (pdf-view-mode)
+             ;; Batch mode has no window to show the buffer.
+             (when (eq image-mode-winprops-alist t)
+               (setq image-mode-winprops-alist nil))
+             ,@body)
+         (delete-directory pdf-form-test-dir t)))))
+
+(ert-deftest pdf-form-sign-with-image ()
+  (let ((image (expand-file-name "signature.png")))
+    (pdf-form-test-with-image-signing "forms.pdf"
+      (let ((npages (pdf-cache-number-of-pages)))
+        (pdf-form-sign-with-image '(1 0.6 0.05 0.9 0.2) image)
+        ;; The stamp was flattened into the page.
+        (should (= (pdf-cache-number-of-pages) npages))
+        (should-not (cl-some (lambda (a) (eq (alist-get 'type a) 'stamp))
+                             (pdf-info-getannots nil)))
+        (should-not (buffer-modified-p))
+        ;; The image is part of the file now.
+        (with-temp-buffer
+          (set-buffer-multibyte nil)
+          (insert-file-contents-literally file)
+          (goto-char (point-min))
+          (should (search-forward "/Subtype /Image" nil t))
+          (should-not (search-forward "/Subtype /Stamp" nil t)))
+        ;; Undo restores the version with the unflattened stamp.
+        (pdf-pages-undo)
+        (should (cl-some (lambda (a) (eq (alist-get 'type a) 'stamp))
+                         (pdf-info-getannots nil)))))))

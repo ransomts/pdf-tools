@@ -1219,12 +1219,18 @@ Return the new annotation."
           (pcase type
             ;; The start and end point of the line.
             ('line edges)
-            ;; Draft can not be set later, so pass the icon along.
+            ;; Draft can not be set later, so pass the icon along;
+            ;; the same goes for the image of an image stamp.
             ('stamp
-             (let ((icon (cdr (assq 'icon property-alist))))
-               (setq property-alist (assq-delete-all
-                                     'icon (copy-sequence property-alist)))
-               (and icon (list icon))))
+             (let* ((alist (copy-sequence property-alist))
+                    (icon (cdr (assq 'icon alist)))
+                    (image (cdr (assq 'image alist))))
+               (setq property-alist
+                     (assq-delete-all 'icon (assq-delete-all 'image alist)))
+               (and (or icon image)
+                    (list (if image
+                              (concat "image:" (expand-file-name image))
+                            icon)))))
             ;; The strokes, preceded by their width, which can not
             ;; be changed later.
             ('ink
@@ -1564,6 +1570,95 @@ Return the new annotation."
    (pdf-annot--shape-properties
     'stamp (and icon `((icon . ,icon))) property-alist)
    (car region)))
+
+(defun pdf-annot-png-size (file)
+  "Return the size of the PNG image in FILE, as a cons (WIDTH . HEIGHT).
+
+The values are in pixels.  Signal an error, if FILE is not a PNG
+image.  Only the header of FILE is read."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally file)
+    (when (or (< (point-max) 24)
+              (not (equal (buffer-substring 1 9)
+                          (unibyte-string ?\211 ?P ?N ?G 13 10 26 10)))
+              (not (equal (buffer-substring 13 17) "IHDR")))
+      (error "Not a PNG image: %s" file))
+    (let ((decode
+           (lambda (from)
+             (+ (* (char-after from) 16777216)
+                (* (char-after (+ from 1)) 65536)
+                (* (char-after (+ from 2)) 256)
+                (char-after (+ from 3))))))
+      (cons (funcall decode 17) (funcall decode 21)))))
+
+(defun pdf-annot--fit-edges (edges aspect)
+  "Return EDGES shrunk to ASPECT, the ratio of width to height.
+
+The result has the same center and, unless it is empty, one of its
+width and height is that of EDGES; the other one is smaller, so
+that the ratio of the result is ASPECT."
+  (when (and aspect (> aspect 0))
+    (pdf-util-with-edges (edges)
+      (cond
+       ((or (<= edges-width 0) (<= edges-height 0))
+        ;; An empty region: give it the shape of ASPECT.
+        (list edges-left edges-top
+              (+ edges-left 0.1) (+ edges-top (/ 0.1 aspect))))
+       ((> (/ edges-width edges-height) aspect)
+        (let ((new-width (* edges-height aspect)))
+          (list (+ edges-left (/ (- edges-width new-width) 2))
+                edges-top
+                (+ edges-left (/ (+ edges-width new-width) 2))
+                edges-bot)))
+       (t
+        (let ((new-height (/ edges-width aspect)))
+          (list edges-left
+                (+ edges-top (/ (- edges-height new-height) 2))
+                edges-right
+                (+ edges-top (/ (+ edges-height new-height) 2)))))))))
+
+(defun pdf-annot-add-image-stamp-annotation (region &optional image
+                                                    property-alist)
+  "Add a new stamp annotation showing IMAGE in the selected window.
+
+REGION determines the area the stamp fills; see
+`pdf-annot-add-shape-annotation'.  The image keeps its aspect
+ratio: it is centered in the bounding box of REGION, shrunk to
+the smaller of the width and height of that box.  IMAGE is the
+name of a PNG file; it becomes part of the PDF and can not be
+changed afterwards, only by deleting the annotation.
+Interactively, read IMAGE in the minibuffer.
+
+The stamp can be moved while its document is open.  Once it has
+been saved and the document reopened, moving it again drops the
+image; delete the annotation and place it anew instead.
+
+PROPERTY-ALIST is as in `pdf-annot-add-annotation'; it can not
+change the appearance of the image.
+
+See also `pdf-annot-add-annotation'.
+
+Return the new annotation."
+  (interactive
+   (list (pdf-view-active-region t)
+         (read-file-name "Image file (PNG): ")))
+  (unless (pdf-info-image-stamps-p)
+    (error "Creating image stamps is not supported by this version of \
+epdfinfo (requires poppler-glib >= 22.07 and PNG support in cairo)"))
+  (unless image
+    (error "No image given"))
+  (let* ((image (expand-file-name image))
+         (size (pdf-annot-png-size image))
+         (aspect (/ (car size) (float (cdr size))))
+         (edges (pdf-annot--fit-edges
+                 (pdf-annot--region-rectangle region) aspect)))
+    (pdf-annot-add-annotation
+     'stamp
+     edges
+     (cons (cons 'image image)
+           (pdf-annot--shape-properties 'stamp property-alist))
+     (car region))))
 
 (defun pdf-annot--assert-creatable (type)
   "Signal an error, if epdfinfo can not create annotations of TYPE."

@@ -158,6 +158,10 @@ typedef struct
 {
   PopplerAnnotMapping *amap;
   gchar *key;
+  /* The file whose image a stamp created by `addannot' shows, or
+     NULL.  It is reapplied when the annotation moves, which drops
+     the appearance poppler gave it. */
+  gchar *image_file;
 } annotation_t;
 
 typedef enum

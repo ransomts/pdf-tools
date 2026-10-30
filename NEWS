@@ -17,6 +17,10 @@
   + Uses the =qpdf= program (8.4 or later), see ~pdf-pages-qpdf-program~.
   + Refuses to touch a buffer with unsaved changes, replaces the file only after qpdf succeeded, and keeps previous versions for ~pdf-pages-undo~ (~C-c C-o u~).
 - Flatten annotations and form fields with ~pdf-pages-flatten-annotations~ (~C-c C-o f~), so that filled-in forms and documents annotated with other editors look the same in every PDF viewer.  Filled-in form field values become part of the page; annotations without an appearance stream (which this package creates) stay interactive, hyperlinks are preserved, and a file attachment is replaced by the drawing of its icon.  Form field appearances can be regenerated while flattening, see ~pdf-pages-flatten-generate-appearances~; needs =qpdf= 11.8 or later.  The previous version is kept for ~pdf-pages-undo~.
+- Sign documents with an image of your signature, ~M-x pdf-form-sign-with-image~
+  + Choose an empty signature field or a rectangle of the page as for ~pdf-form-sign~; the image (a PNG file, ~pdf-form-signature-image~ by default) is placed there, keeping its aspect ratio, and flattened into the page right away, so the signed document looks the same everywhere.  The previous version is kept for ~pdf-pages-undo~.
+  + This is a signature in the everyday sense, not a digital one: it does not certify who signed.  Needs poppler-glib >= 22.07 with PNG support in cairo and =qpdf= 11.8 or later.
+- Add stamps showing a PNG image with ~M-x pdf-annot-add-image-stamp-annotation~: the image fills the selected region, keeping its aspect ratio, and becomes part of the PDF.  Moving the stamp keeps its image while the document is open; after saving and reopening, place it again instead of moving it.
 - Add ~pdf-thumbs~ (~T~), a grid of page thumbnails
   + The grid reflows to the window width, labels each thumbnail with its page label, and highlights the current page. ~RET~ or a click shows a page.
   + Thumbnails render asynchronously, those in view first, so long documents open at once. They follow ~pdf-view-midnight-minor-mode~.
@@ -80,6 +84,7 @@
 - New server commands ~structure~, ~fonts~ and ~xmpmetadata~, with the wrappers ~pdf-info-structure~, ~pdf-info-fonts~ and ~pdf-info-xmp-metadata~.
   + ~structure~ needs poppler-glib >= 0.26; ~pdf-info-structure-tree-p~ tells whether the server has it (feature ~structure-tree~).
   + With its optional argument (~FULL~ in ~pdf-info-structure~), ~structure~ returns the whole text of each element for reading it, without the text of nested figures, and the numbering of list items.
+- ~epdfinfo~ reports the feature ~image-stamps~; ~addannot~ accepts ~stamp~ with the extra argument ~image:FILENAME~ for a stamp showing the PNG image in FILENAME.  New function ~pdf-info-image-stamps-p~.
 - ~epdfinfo~ reports the features ~shape-annotations~ and ~stamp-annotations~; ~addannot~ accepts the types ~square~, ~circle~, ~line~ (with optional start and end points) and ~stamp~ (with an optional icon), and ~editannot~ the properties ~interior-color~ and ~line~ and ~icon~ for stamps.
 - New functions ~pdf-info-shape-annotations-p~, ~pdf-info-stamp-annotations-p~, ~pdf-info-free-text-annotations-p~ and ~pdf-info-ink-annotations-p~.
 - New ~pdf-view-region-selection-style~ returns the selection style to read ~pdf-view-active-region~ with
