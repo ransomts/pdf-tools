@@ -229,7 +229,7 @@ This also applies when updating via MELPA / NonGNU ELPA (except for running the 
 + Isearch :: Interactively search PDF documents like any other buffer, either for a string or a PCRE.
 + Occur :: List lines matching a string or regexp in one or more PDF documents.
 + Follow :: Click on highlighted links, moving to some part of a different page, some external file, a website or any other URI. Links may also be followed by keyboard commands.
-+ Annotations :: Display and list text and markup annotations (like underline), edit their contents and attributes (e.g. color), move them around, delete them or create new ones and then save the modifications back to the PDF file. [[id:5fff6471-a933-46d7-8ae9-b2fa4a9de952][More information here]].
++ Annotations :: Display and list text and markup annotations (like underline), edit their contents and attributes (e.g. color), move them around, delete them or create new ones and then save the modifications back to the PDF file. Export them as XFDF and import them again (~M-x pdf-xfdf-export~, ~M-x pdf-xfdf-import~), to exchange them with other PDF editors or between copies of a document. [[id:5fff6471-a933-46d7-8ae9-b2fa4a9de952][More information here]].
 + Attachments :: Save files attached to the PDF-file or list them in a dired buffer.
 + Outline :: Use ~imenu~ or a special buffer (=M-x pdf-outline=) to examine and navigate the PDF's outline.
 + SyncTeX :: Jump from a position on a page directly to the TeX source and vice versa.
@@ -342,6 +342,15 @@ You can customize the appearance with:
 :ID:       5fff6471-a933-46d7-8ae9-b2fa4a9de952
 :END:
 ~pdf-tools~ supports working with PDF Annotations. You can display and list text and markup annotations (like squiggly, highlight), edit their contents and attributes (e.g. color), move them around, delete them or create new ones and then save the modifications back to the PDF file.
+
+*** Exchanging annotations as XFDF
+
+~M-x pdf-xfdf-export~ writes the annotations of the visited PDF to a file in [[https://en.wikipedia.org/wiki/XFDF][XFDF]], the annotation exchange format that Adobe defined and other PDF editors, e.g. Okular and Foxit, read and write; ~M-x pdf-xfdf-import~ creates the annotations of such a file in the visited PDF. Both read the file name in the minibuffer, defaulting to the PDF's name with the suffix ~.xfdf~.
+
+Use them to move annotations between copies of a document: grade one copy of an exam with the annotation commands and send the XFDF file along with the blank original, rather than a modified PDF.
+
+The type, page, rectangle, color, opacity, contents, author, subject, the marked-up text regions of markup annotations, the icon of text and stamp annotations, the interior color of squares and circles, and the popup rectangle and state survive a round trip. An ink annotation is not exported, for poppler cannot read its strokes back; the vertices of a line are approximated by the corners of its rectangle; an image stamp exports its rectangle, but not its image, which XFDF cannot carry. Which types are written is ~pdf-xfdf-export-types~, and ~pdf-xfdf-author~ names the author of imported annotations.
+
 *** Keybindings for working with Annotations
 :PROPERTIES:
 :CREATED:  [2021-12-30 Thu 17:08]
