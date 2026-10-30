@@ -1492,6 +1492,9 @@ ID should be a symbol, which was previously returned in a
 `pdf-info-getannots' query.
 
 MODIFICATIONS is an alist of properties and their new values.
+Besides the common properties like `color', `contents' and
+`edges', markup annotations take `label', `opacity', `popup' and
+`popup-is-open', and text annotations `icon' and `is-open'.
 
 The server must support modifying annotations for this to work."
 
@@ -1503,7 +1506,7 @@ The server must support modifying annotations for this to work."
               (color
                (list (car elt)
                      (pdf-util-hexcolor (cdr elt))))
-              (edges
+              ((edges popup)
                (list (car elt)
                      (mapconcat 'number-to-string (cdr elt) " ")))
               ((popup-is-open is-open)

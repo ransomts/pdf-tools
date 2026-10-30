@@ -3116,10 +3116,24 @@ cmd_editannot (const epdfinfo_t *ctx, const command_arg_t *args)
       else if (! strcmp (key, "popup"))
         {
           PopplerAnnotMarkup *ma = POPPLER_ANNOT_MARKUP (pa);
+          gdouble width, height;
+          PopplerRectangle r;
+
           perror_if_not (command_arg_parse_arg  (ctx, rest_args[i], &carg,
                                                  ARG_EDGES, NULL),
                          unexpected_parse_error, rest_args[i]);
-          poppler_annot_markup_set_popup (ma, &carg.value.rectangle);
+          /* Scale the relative edges to the page, as everywhere
+             else; poppler wants user space points. */
+          r = carg.value.rectangle;
+          poppler_page_get_size (page, &width, &height);
+          r.x1 *= width;
+          r.x2 *= width;
+          {
+            gdouble top = r.y1;
+            r.y1 = height * (1 - r.y2);
+            r.y2 = height * (1 - top);
+          }
+          poppler_annot_markup_set_popup (ma, &r);
         }
       else if (! strcmp (key, "popup-is-open"))
         {
