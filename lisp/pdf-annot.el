@@ -1060,10 +1060,16 @@ i.e. a non mouse-movement event is read."
     nil))
 
 (defun pdf-annot-hotspot-function (page size)
-  "Create image hotspots for page PAGE of size SIZE."
+  "Create image hotspots for page PAGE of size SIZE.
+
+Leave out links, which `pdf-links' handles, and widget
+annotations, which are the visible parts of form fields: their
+hotspots belong to `pdf-form', whose handlers fill in and sign the
+fields.  Claiming a widget's hotspot here instead would only offer
+to edit the annotation's contents, which viewers never show."
   (apply #'nconc (mapcar (lambda (a)
-                           (unless (eq (pdf-annot-get a 'type)
-                                       'link)
+                           (unless (memq (pdf-annot-get a 'type)
+                                         '(link widget))
                              (pdf-annot-create-hotspots a size)))
                          (pdf-annot-getannots page))))
 
