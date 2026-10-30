@@ -18,7 +18,11 @@
                             auto-mode-alist)
                      (assoc pdf-loader--magic-mode-alist-item
                             magic-mode-alist))))
-    (pdf-loader--install #'ignore)
-    (should (alists-installed-p))
-    (pdf-loader--uninstall)
-    (should-not (alists-installed-p))))
+    ;; Uninstalling removes PDF Tools' own entries too, which share
+    ;; the loader's patterns; don't take them from the other tests.
+    (let ((auto-mode-alist (copy-sequence auto-mode-alist))
+          (magic-mode-alist (copy-sequence magic-mode-alist)))
+      (pdf-loader--install #'ignore)
+      (should (alists-installed-p))
+      (pdf-loader--uninstall)
+      (should-not (alists-installed-p)))))
