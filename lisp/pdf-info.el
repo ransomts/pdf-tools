@@ -1772,12 +1772,15 @@ ID should be a symbol, which was previously returned in a
 
 MODIFICATIONS is an alist of properties and their new values.
 Besides the common properties like `color', `contents' and
-`edges', square and circle annotations accept `interior-color'
-\(nil removes it\), line annotations `line', a list \(X1 Y1 X2
-Y2\) of new start and end points, stamp annotations `icon',
-one of `pdf-info-standard-stamp-icons' except \"Draft\", and free
-text annotations `font-name', `font-size' and `font-color'.  Ink
-annotations keep their size, when their `edges' change.
+`edges', markup annotations take `label', `opacity', `popup' and
+`popup-is-open', square and circle annotations accept
+`interior-color' \(nil removes it\), line annotations `line', a
+list \(X1 Y1 X2 Y2\) of new start and end points, stamp
+annotations `icon', one of `pdf-info-standard-stamp-icons'
+except \"Draft\", free text annotations `font-name',
+`font-size' and `font-color', and text annotations `icon' and
+`is-open'.  Ink annotations keep their size, when their `edges'
+change.
 
 The server must support modifying annotations for this to work."
 
@@ -1797,7 +1800,7 @@ The server must support modifying annotations for this to work."
                      (pdf-util-hexcolor (cdr elt))))
               (font-size
                (list (car elt) (number-to-string (cdr elt))))
-              ((edges line)
+              ((edges line popup)
                (list (car elt)
                      (mapconcat 'number-to-string (cdr elt) " ")))
               ((popup-is-open is-open)
