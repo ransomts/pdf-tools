@@ -21,10 +21,12 @@
 ;;; Commentary:
 ;;
 ;; Page operations on the PDF file visited by a `pdf-view-mode'
-;; buffer: delete, extract, move and rotate pages, and insert pages of
-;; another PDF.  Poppler, and therefore the epdfinfo server, cannot
-;; rewrite a document's page tree, so the work is done by the qpdf
-;; command line program (version 8.4 or later), see
+;; buffer: delete, extract, move and rotate pages, insert pages of
+;; another PDF, and flatten annotations and form fields.  Poppler,
+;; and therefore the epdfinfo server, cannot rewrite a document's
+;; page tree or push annotations into a page's contents, so the
+;; work is done by the qpdf command line program (version 8.4 or
+;; later, 11.8 or later for flattening), see
 ;; `pdf-pages-qpdf-program'.
 ;;
 ;; Every operation that changes the visited file
@@ -44,7 +46,8 @@
 ;; Commands take the current page.  A numeric prefix argument N
 ;; selects N pages starting at the current one, and a plain C-u
 ;; prompts for a page range in qpdf syntax,
-;; e.g. "3-5,8,10-z" (z is the last page).
+;; e.g. "3-5,8,10-z" (z is the last page).  Flattening works on the
+;; whole document, as the qpdf program does.
 
 (require 'pdf-view)
 (require 'pdf-info)
@@ -63,7 +66,8 @@
 ;; * ================================================================== *
 
 (defgroup pdf-pages nil
-  "Delete, extract, move, rotate and insert PDF pages."
+  "Delete, extract, move and rotate PDF pages, insert pages of
+other PDFs, and flatten annotations."
   :group 'pdf-tools)
 
 (defcustom pdf-pages-qpdf-program "qpdf"
@@ -86,6 +90,19 @@ overwriting an existing file."
   :type '(choice (const :tag "Before every change" t)
                  (const :tag "Before deleting pages and undoing" destructive)
                  (const :tag "Never" nil)))
+
+(defcustom pdf-pages-flatten-generate-appearances t
+  "Whether `pdf-pages-flatten-annotations' regenerates form appearances.
+
+Flattening a form field needs an appearance stream that shows its
+value.  The qpdf program generates one for fields whose
+appearances are out of date with their values, but only within
+its limits: characters outside US-ASCII are replaced by question
+marks, auto-sized fonts get a fixed size, and quadding, rich text
+and multi-line formatting are ignored.  When nil, the
+appearances are kept as they are and fields with out-of-date
+appearances stay interactive instead of being flattened."
+  :type 'boolean)
 
 (defcustom pdf-pages-undo-limit 10
   "How many previous versions of a file `pdf-pages-undo' can restore.
@@ -239,6 +256,40 @@ appended, in the same directory."
              (executable-find pdf-pages-qpdf-program)))
       (error "Cannot find the qpdf program `%s'; install qpdf or \
 customize `pdf-pages-qpdf-program'" pdf-pages-qpdf-program)))
+
+(defvar pdf-pages--qpdf-version nil
+  "The cached version of the qpdf program, as a list of numbers.")
+
+(defun pdf-pages--qpdf-version ()
+  "Return the version of the qpdf program as a list of numbers.
+
+Signal an error if it cannot be determined, e.g. because the
+program cannot be run."
+  (or pdf-pages--qpdf-version
+      (let ((result (pdf-pages--call-qpdf nil "--version")))
+        (unless (and (pdf-pages--ok-p result)
+                     (string-match "version \\([0-9]+\\(?:\\.[0-9]+\\)*\\)"
+                                   (cdr result)))
+          (error "Cannot determine the version of the qpdf program \
+%s" (cdr result)))
+        (setq pdf-pages--qpdf-version
+              (mapcar #'string-to-number
+                      (split-string (match-string 1 (cdr result))
+                                    "\\."))))))
+
+(defun pdf-pages--qpdf-version-at-least (version)
+  "Return non-nil if the qpdf program's version is at least VERSION.
+
+VERSION is a list of numbers, e.g. (11 8) for 11.8.  Signal an
+error if the version cannot be determined."
+  (let ((actual (pdf-pages--qpdf-version)))
+    (while (and version actual (= (car version) (car actual)))
+      (setq version (cdr version)
+            actual (cdr actual)))
+    ;; Equal so far: the shorter one counts as filled up with zeros.
+    (cond ((null version) t)
+          ((null actual) (cl-every (lambda (n) (zerop n)) version))
+          (t (> (car actual) (car version))))))
 
 (defun pdf-pages--call-qpdf (password &rest args)
   "Run qpdf with ARGS, decrypting with PASSWORD unless it is nil.
@@ -819,6 +870,56 @@ Return FILE's buffer."
 
 
 ;; * ================================================================== *
+;; * Flattening
+;; * ================================================================== *
+
+(defun pdf-pages-flatten-annotations ()
+  "Flatten the annotations and form fields of the visited PDF file.
+
+Push the document's annotations into the contents of the pages
+they are on, and the values of filled-in form fields into their
+appearances on the page, so that every PDF viewer shows the
+document the same way and annotations and fields can no longer be
+edited, moved or replied to.  Use this before returning a graded
+or filled-in document to readers with other PDF viewers.
+
+The qpdf program, which does the work, flattens an annotation
+only if it has an appearance stream.  This holds for form fields
+and for the annotations of most other PDF editors, but not for
+annotations without one, which this package creates: those stay
+interactive, as every viewer draws them anyway.  Hyperlinks are
+preserved.  A file attachment is replaced by the drawing of its
+icon; save attached files first with
+\\[pdf-annot-attachment-dired].
+
+Form fields whose appearance is out of date with their value are
+left interactive instead of being flattened, unless appearances
+are generated for them, see `pdf-pages-flatten-generate-appearances'.
+
+This works on the whole document and needs the qpdf program,
+version 11.8 or later, see `pdf-pages-qpdf-program'.  The
+previous version of the file is kept and can be restored with
+`pdf-pages-undo'."
+  (interactive)
+  (unless (pdf-pages--qpdf-version-at-least '(11 8))
+    (error "Flattening needs the qpdf program version 11.8 or later, \
+not %s; see `pdf-pages-qpdf-program'"
+           (mapconcat #'number-to-string
+                      (pdf-pages--qpdf-version) ".")))
+  (pdf-pages--modify
+   (if pdf-pages-flatten-generate-appearances
+       "flatten annotations and form fields"
+     "flatten annotations without regenerating form appearances")
+   (pdf-cache-number-of-pages)
+   (pdf-pages--current-page)
+   (append (when pdf-pages-flatten-generate-appearances
+             (list "--generate-appearances"))
+           (list "--flatten-annotations=all"))
+   t))
+
+
+
+;; * ================================================================== *
 ;; * Minor mode
 ;; * ================================================================== *
 
@@ -833,6 +934,7 @@ Return FILE's buffer."
     (define-key smap "l" #'pdf-pages-rotate-counterclockwise)
     (define-key smap "i" #'pdf-pages-insert-file)
     (define-key smap "a" #'pdf-pages-append-file)
+    (define-key smap "f" #'pdf-pages-flatten-annotations)
     (define-key smap "u" #'pdf-pages-undo)
     kmap)
   "Keymap used for `pdf-pages-minor-mode'.")
@@ -848,11 +950,13 @@ Return FILE's buffer."
     ["Insert PDF File..." pdf-pages-insert-file]
     ["Append PDF File..." pdf-pages-append-file]
     "--"
+    ["Flatten Annotations and Form Fields" pdf-pages-flatten-annotations]
     ["Undo Last Page Operation" pdf-pages-undo]))
 
 ;;;###autoload
 (define-minor-mode pdf-pages-minor-mode
-  "Delete, extract, move, rotate and insert PDF pages.
+  "Delete, extract, move and rotate pages, insert pages of another
+PDF, and flatten annotations and form fields.
 
 The commands change the visited file with the qpdf program, see
 `pdf-pages-qpdf-program'.  They work on the current page, on N

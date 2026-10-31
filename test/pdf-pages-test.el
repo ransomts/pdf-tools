@@ -331,3 +331,84 @@ Attachments\\|Outline" text)
           (should (= (pdf-cache-number-of-pages) npages))
           (should (equal (pdf-pages-test-file-contents pdf-pages-test-file)
                          original)))))))
+
+
+;;; Flattening
+
+(defun pdf-pages-test-qpdf-at-least (version)
+  "Return non-nil if a qpdf of at least VERSION runs and reports itself."
+  (and (executable-find pdf-pages-qpdf-program)
+       (ignore-errors (pdf-pages--qpdf-version-at-least version))))
+
+(ert-deftest pdf-pages-test-qpdf-version ()
+  (skip-unless (executable-find pdf-pages-qpdf-program))
+  (should (equal (pdf-pages--qpdf-version) (pdf-pages--qpdf-version)))
+  (should (pdf-pages--qpdf-version-at-least '(1)))
+  (should-not (pdf-pages--qpdf-version-at-least '(1000))))
+
+(ert-deftest pdf-pages-test-flatten-annotations ()
+  (skip-unless (pdf-pages-test-qpdf-at-least '(11 8)))
+  (pdf-pages-test-with-copy "test.pdf"
+    (let ((npages (pdf-cache-number-of-pages))
+          ;; The markup and text annotations of page 2 have no
+          ;; appearance streams, which the qpdf program cannot
+          ;; flatten.
+          (markup-types '(highlight squiggly underline strike-out text)))
+      (save-buffer)
+      (pdf-pages-flatten-annotations)
+      (should (= (pdf-cache-number-of-pages) npages))
+      ;; The file attachment of page 4 has an appearance stream and
+      ;; is flattened into the page.
+      (should-not (cl-some (lambda (a) (eq (alist-get 'type a) 'file))
+                           (pdf-info-getannots nil)))
+      ;; The annotations without one are not touched.
+      (should (cl-every (lambda (a)
+                          (memq (alist-get 'type a) markup-types))
+                        (pdf-info-getannots 2)))
+      (should (= 5 (length (pdf-info-getannots 2))))
+      (should-not (buffer-modified-p))
+      (should (verify-visited-file-modtime))
+      (should-not (pdf-pages-test-stray-files))
+      ;; Undo brings the file attachment back.
+      (pdf-pages-undo)
+      (should (cl-some (lambda (a) (eq (alist-get 'type a) 'file))
+                       (pdf-info-getannots nil)))
+      (should (= (pdf-cache-number-of-pages) npages)))))
+
+(ert-deftest pdf-pages-test-flatten-form-fields ()
+  (skip-unless (pdf-pages-test-qpdf-at-least '(11 8)))
+  (pdf-pages-test-with-copy "forms.pdf"
+    (let ((field (cl-find "name" (pdf-info-formfields 1)
+                          :key (lambda (f) (alist-get 'name f))
+                          :test #'equal)))
+      (pdf-info-setformfield (alist-get 'id field) "Ada Lovelace")
+      (set-buffer-modified-p t)
+      (save-buffer)
+      (pdf-pages-flatten-annotations)
+      ;; The filled-in value is part of the page now, and the field
+      ;; is gone; only the Reset push button, which the qpdf program
+      ;; cannot flatten, remains.
+      (should (string-match-p "Ada Lovelace"
+                              (pdf-info-gettext 1 '(0 0 1 1))))
+      (should-not (cl-find "name" (pdf-info-formfields 1)
+                           :key (lambda (f) (alist-get 'name f))
+                           :test #'equal))
+      (should (equal (mapcar (lambda (f) (alist-get 'name f))
+                             (pdf-info-formfields 1))
+                     '("Reset")))
+      (should-not (buffer-modified-p))
+      ;; Undo restores the field and its value.
+      (pdf-pages-undo)
+      (let ((field (cl-find "name" (pdf-info-formfields 1)
+                            :key (lambda (f) (alist-get 'name f))
+                            :test #'equal)))
+        (should (equal (alist-get 'value field) "Ada Lovelace")))
+      (should-not (string-match-p
+                   "Ada Lovelace" (pdf-info-gettext 1 '(0 0 1 1)))))))
+
+(ert-deftest pdf-pages-test-flatten-needs-qpdf ()
+  (pdf-pages-test-with-copy "test.pdf"
+    (let ((pdf-pages--qpdf-version '(8 4 3)))
+      (should (string-match-p
+               "11.8 or later"
+               (cadr (should-error (pdf-pages-flatten-annotations))))))))
