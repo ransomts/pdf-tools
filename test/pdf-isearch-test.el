@@ -145,13 +145,8 @@ SPEC is a plist with :forward, :regexp, :case-fold and :word."
         (should (= 0 (funcall count "store" 1)))))))
 
 (ert-deftest pdf-isearch-search-fun-word-toggled ()
-  ;; BUG: `pdf-isearch-search-fun-default' only treats
-  ;; `isearch-regexp-function' (alias `isearch-word') eq to t as word
-  ;; search.  Toggling word search inside isearch (M-s w) sets it to
-  ;; the function `word-search-regexp' instead (and M-s _ to
-  ;; `isearch-symbol-regexp'), so the PDF is then searched for the
-  ;; literal string.  `pdf-isearch-occur' does handle a function value.
-  :expected-result :failed
+  ;; Toggling word search inside isearch (M-s w) sets
+  ;; `isearch-regexp-function' to `word-search-regexp', not t.
   (pdf-isearch-test-with-displayed-pdf
     (pdf-isearch-test-with-search-state (:word word-search-regexp :case-fold t)
       ;; As with (:word t): four matches, two of them across a line break.

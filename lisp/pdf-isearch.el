@@ -495,7 +495,8 @@ coordinates, sorted top to bottom, then left to right."
 (defun pdf-isearch-search-fun-default ()
   "Return default functions to use for the search."
   (cond
-   ((eq isearch-word t)
+   ;; M-s w inside isearch sets `word-search-regexp' rather than t.
+   ((memq isearch-word '(t word-search-regexp))
     (lambda (string &optional pages)
       ;; Use lax versions to not fail at the end of the word while
       ;; the user adds and removes characters in the search string
