@@ -313,9 +313,12 @@ pixels.  The copied file is deleted when BODY exits."
 
 (ert-deftest pdf-view-copy-image-file-command ()
   "The clipboard program is chosen from the display and the system."
+  ;; The display is read with `getenv', i.e. from `process-environment',
+  ;; not from a variable of the same name, so it is set here the same
+  ;; way: the test must not depend on how the batch Emacs was started.
+  ;;
   ;; Wayland, even with DISPLAY set through XWayland.
-  (let ((WAYLAND_DISPLAY "wayland-0")
-        (DISPLAY ":0")
+  (let ((process-environment '("WAYLAND_DISPLAY=wayland-0" "DISPLAY=:0"))
         (pdf-view-clipboard-program nil))
     (cl-letf (((symbol-function 'executable-find)
                (lambda (program)
@@ -323,8 +326,7 @@ pixels.  The copied file is deleted when BODY exits."
       (should (equal (pdf-view--clipboard-command "/tmp/image.png")
                      '("wl-copy" "--type" "image/png")))))
   ;; Still Wayland when there is no DISPLAY at all.
-  (let ((WAYLAND_DISPLAY nil)
-        (DISPLAY nil)
+  (let ((process-environment '("WAYLAND_DISPLAY=wayland-0"))
         (pdf-view-clipboard-program nil))
     (cl-letf (((symbol-function 'executable-find)
                (lambda (program)
@@ -332,8 +334,7 @@ pixels.  The copied file is deleted when BODY exits."
       (should (equal (pdf-view--clipboard-command "/tmp/image.png")
                      '("wl-copy" "--type" "image/png")))))
   ;; X11.
-  (let ((WAYLAND_DISPLAY nil)
-        (DISPLAY ":0")
+  (let ((process-environment '("DISPLAY=:0"))
         (pdf-view-clipboard-program nil))
     (cl-letf (((symbol-function 'executable-find)
                (lambda (program)
@@ -342,8 +343,7 @@ pixels.  The copied file is deleted when BODY exits."
                      '("xclip" "-selection" "clipboard" "-t" "image/png"
                        "-i")))))
   ;; macOS, where the file name goes into the AppleScript.
-  (let ((WAYLAND_DISPLAY nil)
-        (DISPLAY nil)
+  (let ((process-environment nil)
         (system-type 'darwin)
         (pdf-view-clipboard-program nil))
     (cl-letf (((symbol-function 'executable-find) #'ignore))
@@ -351,8 +351,7 @@ pixels.  The copied file is deleted when BODY exits."
                      '("osascript" "-e"
                        "set the clipboard to (read (POSIX file \"/tmp/a b.png\") as «class PNGf»)")))))
   ;; Nothing usable installed.
-  (let ((WAYLAND_DISPLAY nil)
-        (DISPLAY nil)
+  (let ((process-environment nil)
         (system-type 'gnu/linux)
         (pdf-view-clipboard-program nil))
     (cl-letf (((symbol-function 'executable-find) #'ignore))
