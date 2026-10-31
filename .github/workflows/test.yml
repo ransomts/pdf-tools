@@ -69,6 +69,28 @@ jobs:
             libpng-dev libpoppler-glib-dev libpoppler-private-dev \
             libz-dev pkg-config qpdf
 
+      # The Linux runner image confines qpdf with an enforcing AppArmor
+      # profile that lets it read *.pdf files and a few system files
+      # and nothing else, so `qpdf --add-attachment NOTES.md' fails
+      # with "Permission denied" on a file every other program can
+      # read.  Attaching arbitrary files is what the attachment tests
+      # test, so lift the confinement for the run.
+      - name: Let qpdf read the files the tests attach
+        run: |
+          probe="$(mktemp -d)"
+          echo probe > "$probe/probe.md"
+          if qpdf --empty --add-attachment "$probe/probe.md" -- "$probe/out.pdf"; then
+            echo "qpdf can read ordinary files; no confinement to lift."
+            exit 0
+          fi
+          echo "qpdf is confined; its profile:"
+          ls /etc/apparmor.d | grep -i qpdf || true
+          sudo aa-complain qpdf 2>/dev/null ||
+            sudo apparmor_parser -R /etc/apparmor.d/*qpdf* 2>/dev/null ||
+            sudo aa-teardown 2>/dev/null || true
+          sudo aa-status | grep -i qpdf || true
+          qpdf --empty --add-attachment "$probe/probe.md" -- "$probe/out.pdf"
+
       - name: Compile epdfinfo server
         run: make autobuild
 
@@ -102,6 +124,28 @@ jobs:
           sudo apt-get install -y make automake autoconf gcc g++ \
             libpng-dev libpoppler-glib-dev libpoppler-private-dev \
             libz-dev pkg-config qpdf
+
+      # The Linux runner image confines qpdf with an enforcing AppArmor
+      # profile that lets it read *.pdf files and a few system files
+      # and nothing else, so `qpdf --add-attachment NOTES.md' fails
+      # with "Permission denied" on a file every other program can
+      # read.  Attaching arbitrary files is what the attachment tests
+      # test, so lift the confinement for the run.
+      - name: Let qpdf read the files the tests attach
+        run: |
+          probe="$(mktemp -d)"
+          echo probe > "$probe/probe.md"
+          if qpdf --empty --add-attachment "$probe/probe.md" -- "$probe/out.pdf"; then
+            echo "qpdf can read ordinary files; no confinement to lift."
+            exit 0
+          fi
+          echo "qpdf is confined; its profile:"
+          ls /etc/apparmor.d | grep -i qpdf || true
+          sudo aa-complain qpdf 2>/dev/null ||
+            sudo apparmor_parser -R /etc/apparmor.d/*qpdf* 2>/dev/null ||
+            sudo aa-teardown 2>/dev/null || true
+          sudo aa-status | grep -i qpdf || true
+          qpdf --empty --add-attachment "$probe/probe.md" -- "$probe/out.pdf"
 
       - name: Compile epdfinfo server
         run: make autobuild
