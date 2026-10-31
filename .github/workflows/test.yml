@@ -37,7 +37,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y make automake autoconf gcc g++ \
             libpng-dev libpoppler-glib-dev libpoppler-private-dev \
-            libz-dev pkg-config
+            libz-dev pkg-config qpdf
 
       - name: Compile epdfinfo server
         run: make autobuild
@@ -69,7 +69,7 @@ jobs:
 
       - name: Install server build dependencies
         run: |
-          brew install automake autoconf poppler pkg-config gnu-sed
+          brew install automake autoconf poppler pkg-config gnu-sed qpdf
           echo "$(brew --prefix gnu-sed)/libexec/gnubin" >> $GITHUB_PATH
 
       - name: Compile epdfinfo server
