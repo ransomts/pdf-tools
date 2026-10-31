@@ -234,12 +234,6 @@
                  '(?B ?A))))
 
 (ert-deftest pdf-links-create-keys-shortest ()
-  ;; BUG: The key length is computed as 1 + floor(log(N, 26)), which is
-  ;; one letter too long when N is an exact power of 26: 26 links need
-  ;; only A..Z, yet every key gets two letters (AA..AZ), so the reader
-  ;; has to type a redundant leading "A".  The length should be the
-  ;; number of base-26 digits of N - 1.
-  :expected-result :failed
   (should (equal (mapcar #'length
                          (pdf-links-read-link-action--create-keys 26))
                  (make-list 26 1))))
