@@ -29,6 +29,22 @@
 ;; Clicking on a signature field, or M-x pdf-form-signatures, shows
 ;; whether its signature is valid.
 ;;
+;; M-x pdf-form-sign signs the document with a certificate from an
+;; NSS database, see `pdf-info-nss-directory', into an empty
+;; signature field or a rectangle of the page.  Clicking on an empty
+;; signature field offers to sign it.  Poppler writes the signed
+;; document to a new file, so signing
+;;
+;; - refuses to run on a buffer with unsaved changes (it offers to
+;;   save them first), because the signature covers the file on disk
+;;   and they would otherwise be lost,
+;; - lets poppler write the signed version next to the original and
+;;   only then renames it over the original, so a failure leaves the
+;;   file as it was,
+;; - keeps a copy of the unsigned version in
+;;   `pdf-form-backup-directory', and
+;; - reverts the buffer.
+;;
 ;; From Lisp, `pdf-form-values' returns the values of a form and
 ;; `pdf-form-fill' fills one in, both by field name.
 
@@ -42,6 +58,8 @@
 (require 'subr-x)
 
 ;;; Code:
+
+(defvar pdf-view--buffer-file-name)
 
 
 
@@ -81,6 +99,16 @@ opacity, see `pdf-info-renderpage-highlight'."
                (color :tag "Foreground")
                (number :tag "Opacity")))
 
+(defcustom pdf-form-backup-directory nil
+  "Directory for the copies of documents as they were before signing.
+
+If nil, a directory below variable `temporary-file-directory' is used,
+which is deleted when Emacs exits.  If a directory is given, the
+copies are kept there and outlive the Emacs session."
+  :group 'pdf-form
+  :type '(choice (const :tag "Temporary, deleted on exit" nil)
+                 directory))
+
 
 ;; * ================================================================== *
 ;; * Minor Mode
@@ -103,7 +131,8 @@ clicking on them, by moving from field to field with
 \\[pdf-form-next-field] and \\[pdf-form-previous-field], or by pressing \\[pdf-form-fill-field] and
 selecting one of the visible fields.  Save the buffer to keep the
 values.  Clicking on a signature field shows whether its
-signature is valid.
+signature is valid, or offers to sign it if it is empty, see
+`pdf-form-sign'.
 
 The fields you can interact with are marked on the page;
 \\[pdf-form-show-fields] turns the marks off and on.
@@ -376,10 +405,18 @@ off otherwise.  See `pdf-form-show-fields' for what the marks are."
 (defun pdf-form-edit-field (field)
   "Read a new value for FIELD and set it.
 
-Show the validity of a signature field's signature instead."
+Show the validity of a signature field's signature instead, or
+offer to sign it if it is empty."
   (cond
    ((pdf-form-signature-p field)
-    (pdf-form-describe-signatures (list field)))
+    ;; Signing an empty field puts a new one on top of it.
+    (let ((fields (pdf-form--signatures-at field)))
+      (if (and (pdf-info-signing-p)
+               (cl-every #'pdf-form-unsigned-p fields)
+               (y-or-n-p (format "`%s' is not signed; sign it? "
+                                 (pdf-form-label field))))
+          (pdf-form-sign field)
+        (pdf-form-describe-signatures fields))))
    ((pdf-form-reset-button-p field)
     (when (y-or-n-p (format "Press `%s' and reset the form? "
                             (pdf-form-label field)))
@@ -700,6 +737,345 @@ before any field is changed, so an error leaves the form as it was."
     (unless fields
       (user-error "This document has no signature fields"))
     (pdf-form-describe-signatures fields)))
+
+(defun pdf-form-unsigned-p (field)
+  "Return non-nil, if FIELD is a signature field nobody signed."
+  (and (pdf-form-signature-p field)
+       (eq (alist-get 'signature-status
+                      (pdf-info-validatesignature (alist-get 'id field)))
+           'not-found)))
+
+(defun pdf-form--signatures-at (field)
+  "Return the signature fields in the same place as FIELD, FIELD first."
+  (cons field
+        (cl-remove-if-not
+         (lambda (f)
+           (and (pdf-form-signature-p f)
+                (not (eql (alist-get 'id f) (alist-get 'id field)))
+                (equal (alist-get 'edges f) (alist-get 'edges field))))
+         (pdf-cache-formfields (alist-get 'page field)))))
+
+(defun pdf-form-unsigned-fields ()
+  "Return the signature fields of the document nobody signed.
+
+Leave out those under a signed field, which is where signing them
+put the signature."
+  (cl-remove-if-not
+   (lambda (f) (cl-every #'pdf-form-unsigned-p (pdf-form--signatures-at f)))
+   (pdf-form-fields (number-sequence 1 (pdf-cache-number-of-pages))
+                    #'pdf-form-signature-p)))
+
+
+;; * ================================================================== *
+;; * Signing
+;; * ================================================================== *
+
+(defun pdf-form--assert-file ()
+  "Check that the visited file can be signed and return its true name.
+
+The buffer must visit a regular, local, uncompressed PDF file,
+which must be writable, as must be its directory."
+  (pdf-util-assert-pdf-buffer)
+  (when (derived-mode-p 'pdf-virtual-view-mode)
+    (user-error "Virtual PDF buffers can't be signed"))
+  (let ((file (buffer-file-name)))
+    (unless file
+      (user-error "Buffer `%s' is not visiting a file" (buffer-name)))
+    (when (or (file-remote-p file)
+              pdf-view--buffer-file-name
+              (not (file-regular-p file)))
+      (user-error "`%s' is not a local PDF file (remote, compressed or in \
+an archive); signing needs a plain file on disk"
+                  (abbreviate-file-name file)))
+    (setq file (file-truename file))
+    (unless (and (file-writable-p file)
+                 (file-writable-p (file-name-directory file)))
+      (user-error "`%s' or its directory is not writable"
+                  (abbreviate-file-name file)))
+    file))
+
+(defun pdf-form--assert-saved ()
+  "Make sure the buffer has no unsaved changes and matches its file.
+
+The signature covers the file on disk, so offer to save unsaved
+changes (form fields, annotations) first, and signal an error if
+the user declines."
+  (when (buffer-modified-p)
+    (if (y-or-n-p (format "`%s' has unsaved changes (form fields or \
+annotations); save them before signing? " (buffer-name)))
+        (save-buffer)
+      (user-error "Not signing: save or revert the buffer first")))
+  (unless (verify-visited-file-modtime (current-buffer))
+    (user-error "`%s' changed on disk; revert the buffer first (%s)"
+                (buffer-name)
+                (substitute-command-keys "\\[revert-buffer]"))))
+
+(defun pdf-form--signing-certificates ()
+  "Return the signing certificates and the NSS password they needed.
+
+The result is a cons (CERTIFICATES . PASSWORD), see
+`pdf-info-signingcertificates'.  Read the password, if the NSS
+database has one."
+  (let (password certificates (tries 0))
+    (while (null certificates)
+      (condition-case err
+          (setq certificates (list (pdf-info-signingcertificates password)))
+        (error
+         (let ((msg (error-message-string err)))
+           (cond
+            ((and (string-match-p "NSS password required\\|Wrong NSS password" msg)
+                  (< tries 3))
+             (cl-incf tries)
+             (setq password
+                   (read-passwd
+                    (if (string-match-p "Wrong" msg)
+                        "Wrong password, try again: "
+                      "Password of the NSS certificate database: "))))
+            (t (signal (car err) (cdr err))))))))
+    (cons (car certificates) password)))
+
+(defun pdf-form--certificate-to-string (certificate)
+  "Return a string describing CERTIFICATE for the user."
+  (let-alist certificate
+    (concat (or .subject .id)
+            (and .subject-email (format " <%s>" .subject-email))
+            (and .subject-organization (format ", %s" .subject-organization))
+            (format " (%s" .id)
+            (and .issuer (not (equal .issuer .subject))
+                 (format ", issued by %s" .issuer))
+            (and .expires (format ", expires %s"
+                                  (substring (pdf-form-format-time .expires)
+                                             0 (min 10 (length .expires)))))
+            ")")))
+
+(defun pdf-form-read-certificate (certificates)
+  "Let the user choose one of the signing CERTIFICATES."
+  (unless certificates
+    (user-error "There are no signing certificates in the NSS database %s"
+                (if pdf-info-nss-directory
+                    (abbreviate-file-name pdf-info-nss-directory)
+                  "(poppler's default, see `pdf-info-nss-directory')")))
+  (let* ((choices (mapcar (lambda (c)
+                            (cons (pdf-form--certificate-to-string c) c))
+                          certificates))
+         (default (caar choices)))
+    (cdr (assoc (completing-read (format "Sign with certificate (default %s): "
+                                         default)
+                                 choices nil t nil nil default)
+                choices))))
+
+(defun pdf-form--read-corner (prompt)
+  "Read a corner of a rectangle with the mouse using PROMPT.
+
+Return a cons (PAGE . (X . Y)), X and Y relative to the page."
+  (let* ((posn (pdf-util-read-image-position prompt))
+         (window (posn-window posn))
+         (page (if pdf-view-roll-minor-mode
+                   (1+ (/ (posn-point posn) 4))
+                 (pdf-view-current-page window)))
+         (size (with-selected-window window (pdf-view-image-size)))
+         (xy (posn-object-x-y posn)))
+    (cons page (cons (/ (float (car xy)) (car size))
+                     (/ (float (cdr xy)) (cdr size))))))
+
+(defun pdf-form-read-rectangle ()
+  "Read a rectangle of a page for a new signature.
+
+Use the active region, if there is one, otherwise let the user click
+on two opposite corners.  Return a cons (PAGE . EDGES), EDGES
+relative to the page."
+  (if (pdf-view-active-region-p)
+      (let ((region (pdf-view-active-region t)))
+        (cons (car region)
+              (apply #'pdf-util-edges-union
+                     (mapcar (lambda (e)
+                               (pdf-util-with-edges (e)
+                                 (list (min e-left e-right) (min e-top e-bot)
+                                       (max e-left e-right) (max e-top e-bot))))
+                             (cdr region)))))
+    (let* ((a (pdf-form--read-corner
+               "Click on a corner of the new signature (or select a region first)"))
+           (b (pdf-form--read-corner "Click on the opposite corner")))
+      (unless (eql (car a) (car b))
+        (user-error "The corners must be on the same page"))
+      (let ((x1 (cadr a)) (y1 (cddr a)) (x2 (cadr b)) (y2 (cddr b)))
+        (cons (car a) (list (min x1 x2) (min y1 y2) (max x1 x2) (max y1 y2)))))))
+
+(defun pdf-form--read-signature-place ()
+  "Read where to sign: an empty signature field or a rectangle.
+
+Return a field, or a cons (PAGE . EDGES)."
+  (let ((fields (and (not (pdf-view-active-region-p))
+                     (pdf-form-unsigned-fields)))
+        (new "A new field in a rectangle of the page"))
+    (if (null fields)
+        (pdf-form-read-rectangle)
+      (let* ((choices
+              (append (mapcar (lambda (f)
+                                (cons (format "%s (page %d)" (pdf-form-label f)
+                                              (alist-get 'page f))
+                                      f))
+                              fields)
+                      (list (cons new nil))))
+             (choice (completing-read
+                      (format "Sign (default %s): " (caar choices))
+                      choices nil t nil nil (caar choices))))
+        (or (cdr (assoc choice choices))
+            (pdf-form-read-rectangle))))))
+
+(defun pdf-form--new-field-name (base)
+  "Return a field name starting with BASE that the document lacks."
+  (let ((names (mapcar (lambda (f) (alist-get 'name f))
+                       (pdf-form-fields
+                        (number-sequence 1 (pdf-cache-number-of-pages)))))
+        (name base)
+        (n 1))
+    (while (member name names)
+      (setq name (format "%s%d" base (cl-incf n))))
+    name))
+
+(defun pdf-form-signature-text (certificate &optional reason location)
+  "Return the text shown in a signature with CERTIFICATE.
+
+REASON and LOCATION are the signature's, or nil."
+  (let ((signer (or (alist-get 'subject certificate)
+                    (alist-get 'id certificate))))
+    (concat (format "Digitally signed by %s\nDate: %s" signer
+                    (format-time-string "%Y-%m-%d %H:%M:%S %z"))
+            (and reason (format "\nReason: %s" reason))
+            (and location (format "\nLocation: %s" location)))))
+
+(defvar pdf-form--backup-session-directory nil
+  "Temporary directory of this session's backups, if one was created.")
+
+(defun pdf-form--backup-directory ()
+  "Return the directory for backups, creating it if needed."
+  (if pdf-form-backup-directory
+      (let ((dir (expand-file-name pdf-form-backup-directory)))
+        (make-directory dir t)
+        dir)
+    (unless (and pdf-form--backup-session-directory
+                 (file-directory-p pdf-form--backup-session-directory))
+      (setq pdf-form--backup-session-directory
+            (make-temp-file "pdf-form-backup-" t))
+      (add-hook 'kill-emacs-hook #'pdf-form--delete-backup-session-directory))
+    pdf-form--backup-session-directory))
+
+(defun pdf-form--delete-backup-session-directory ()
+  "Delete this session's backup directory."
+  (when (and pdf-form--backup-session-directory
+             (file-directory-p pdf-form--backup-session-directory))
+    (delete-directory pdf-form--backup-session-directory t)))
+
+(defun pdf-form--make-backup (file)
+  "Copy FILE to the backup directory and return the copy's name."
+  (let ((backup (make-temp-file
+                 (expand-file-name (concat (file-name-base file) "-unsigned-")
+                                   (pdf-form--backup-directory))
+                 nil ".pdf")))
+    (copy-file file backup t t)
+    backup))
+
+(defun pdf-form--replace-file (file signed)
+  "Replace FILE by SIGNED, keeping a backup, and revert the buffer.
+
+Return the backup's name."
+  (let ((backup (pdf-form--make-backup file))
+        (page (pdf-view-current-page))
+        done)
+    (unwind-protect
+        (progn
+          (set-file-modes signed (file-modes file))
+          (when (pdf-info-running-p)
+            (ignore-errors (pdf-info-close)))
+          (rename-file signed file t)
+          (setq done t))
+      (unless done
+        (delete-file backup)))
+    (pdf-view-revert-buffer nil t)
+    (when page
+      (pdf-view-goto-page page))
+    backup))
+
+(defun pdf-form-sign (place &optional certificate reason location)
+  "Sign the document at PLACE with CERTIFICATE.
+
+PLACE is an empty signature field or a cons (PAGE . EDGES) of a
+rectangle of relative EDGES.  Interactively, choose one of the
+empty fields of the document, or a new field in the active region
+or in a rectangle selected with the mouse.  Poppler can only add
+new signature fields, so signing an empty field puts a new one
+with the signature on top of it.
+
+CERTIFICATE is the id of one of `pdf-info-signingcertificates'.
+If it is nil, read it from the user, as well as REASON and
+LOCATION, which are optional.  Read the password of the NSS
+database `pdf-info-nss-directory', if it has one.
+
+Unsaved changes have to be saved first, since the signature covers
+the file on disk.  The signed document replaces the visited file
+and the buffer is reverted; a copy of the unsigned version is kept
+in `pdf-form-backup-directory'."
+  (interactive
+   (progn
+     (pdf-form--prepare-signing)
+     (list (pdf-form--read-signature-place))))
+  (pdf-form--prepare-signing)
+  (let* ((file (pdf-form--assert-file))
+         (field (and (pdf-form-signature-p place) place))
+         (page (if field (alist-get 'page field) (car place)))
+         (edges (if field (alist-get 'edges field) (cdr place)))
+         (certs+password (pdf-form--signing-certificates))
+         (password (cdr certs+password))
+         (cert (if certificate
+                   (or (cl-find certificate (car certs+password)
+                                :key (lambda (c) (alist-get 'id c))
+                                :test #'equal)
+                       (error "No signing certificate %s" certificate))
+                 (pdf-form-read-certificate (car certs+password))))
+         (reason (if certificate
+                     reason
+                   (read-string "Reason for signing (optional): ")))
+         (location (if certificate
+                       location
+                     (read-string "Location (optional): ")))
+         (name (pdf-form--new-field-name
+                (if field
+                    (concat (alist-get 'name field) "-signed")
+                  "Signature")))
+         (temp (make-temp-file (expand-file-name
+                                (concat "." (file-name-base file) "-pdf-form-")
+                                (file-name-directory file))
+                               nil ".pdf"))
+         backup)
+    (when (equal reason "") (setq reason nil))
+    (when (equal location "") (setq location nil))
+    (unwind-protect
+        (progn
+          (pdf-info-sign page edges (alist-get 'id cert) name temp
+                         reason location
+                         (pdf-form-signature-text cert reason location)
+                         (or (alist-get 'subject cert) (alist-get 'id cert))
+                         password)
+          (unless (> (or (file-attribute-size (file-attributes temp)) 0) 0)
+            (error "Signing produced no file; `%s' unchanged"
+                   (abbreviate-file-name file)))
+          (setq backup (pdf-form--replace-file file temp)))
+      (when (file-exists-p temp)
+        (delete-file temp)))
+    (message "Signed `%s' as %s; the unsigned version is %s"
+             (file-name-nondirectory file)
+             (or (alist-get 'subject cert) (alist-get 'id cert))
+             (abbreviate-file-name backup))))
+
+(defun pdf-form--prepare-signing ()
+  "Check that the buffer can be signed, before asking anything."
+  (pdf-util-assert-pdf-buffer)
+  (unless (pdf-info-signing-p)
+    (user-error "Signing documents is not supported by this version of epdfinfo \
+(requires poppler-glib >= 23.07)"))
+  (pdf-form--assert-file)
+  (pdf-form--assert-saved))
 
 (provide 'pdf-form)
 

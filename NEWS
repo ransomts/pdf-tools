@@ -9,7 +9,8 @@
   + Fields are shown by their tooltip, if the form gives one, rather than their internal name, and text fields refuse input longer than their limit.
   + Reset buttons work, and ~M-x pdf-form-reset~ resets the whole form (poppler-glib >= 0.90).
   + From Lisp, ~pdf-form-values~ returns a form's values by field name and ~pdf-form-fill~ fills one in, e.g. from an Org table; ~pdf-form-fill~ checks every value before changing anything.
-  + New epdfinfo commands ~getformfields~, ~setformfield~, ~setformfield-text~, ~resetform~ and ~validatesignature~, and the ~form-fields~, ~form-reset~ and ~signatures~ features.
+  + Sign documents with ~M-x pdf-form-sign~, into an empty signature field (also by clicking on it) or a new one in a rectangle of the page, with a certificate from an NSS database (~pdf-info-nss-directory~, by default poppler's). Unsaved changes are saved first; the signed document replaces the file, and a copy of the unsigned one is kept in ~pdf-form-backup-directory~. Requires poppler-glib >= 23.07.
+  + New epdfinfo commands ~getformfields~, ~setformfield~, ~setformfield-text~, ~resetform~, ~validatesignature~, ~setnssdir~, ~signingcertificates~ and ~sign~, and the ~form-fields~, ~form-reset~, ~signatures~ and ~signing~ features.
 - Add ~pdf-pages-minor-mode~ for page operations on the visited file #60
   + Delete (~C-c C-o d~), extract to a new file (~C-c C-o x~), move (~C-c C-o m~) and rotate (~C-c C-o r~ / ~C-c C-o l~) pages, and insert (~C-c C-o i~) or append (~C-c C-o a~) pages of another PDF.
   + Works on the current page, /N/ pages with a numeric prefix argument, or a qpdf page range such as =3-5,8,10-z= with ~C-u~.

@@ -347,3 +347,210 @@ error, and so would `create-image'."
                      (("name" . "Bob") ("name" . 42))))
         (should-error (pdf-form-fill bad))
         (should (equal (pdf-form-values) before))))))
+
+;; Signing.  The tests create a throwaway NSS database with a
+;; self-signed certificate, and sign temporary copies of the fixtures.
+
+(defvar pdf-form-test-dir nil
+  "The temporary directory of the current signing test.")
+
+(defun pdf-form-test-run (program &rest args)
+  "Run PROGRAM with ARGS, signal an error if it fails."
+  (with-temp-buffer
+    (unless (eq 0 (apply #'call-process program nil t nil args))
+      (error "%s failed: %s" program (buffer-string)))))
+
+(defun pdf-form-test-make-nss (dir &optional password)
+  "Make an NSS database in DIR with the certificate `signer'.
+
+Give the database PASSWORD, if non-nil."
+  (let ((key (expand-file-name "key.pem" dir))
+        (cert (expand-file-name "cert.pem" dir))
+        (p12 (expand-file-name "cert.p12" dir))
+        (pwfile (expand-file-name "password" dir))
+        (db (expand-file-name "nssdb" dir)))
+    (make-directory db)
+    (pdf-form-test-run "openssl" "req" "-x509" "-newkey" "rsa:2048" "-nodes"
+                       "-keyout" key "-out" cert "-days" "30"
+                       "-subj" "/CN=Sign Tester/O=pdf-tools")
+    (pdf-form-test-run "openssl" "pkcs12" "-export" "-inkey" key "-in" cert
+                       "-name" "signer" "-out" p12 "-passout" "pass:")
+    (if (null password)
+        (pdf-form-test-run "certutil" "-N" "--empty-password" "-d" db)
+      (with-temp-file pwfile (insert password "\n"))
+      (pdf-form-test-run "certutil" "-N" "-f" pwfile "-d" db))
+    (apply #'pdf-form-test-run "pk12util" "-i" p12 "-d" db "-W" ""
+           (and password (list "-k" pwfile)))
+    db))
+
+(defmacro pdf-form-test-with-signing (fixture password &rest body)
+  "Run BODY visiting a copy of FIXTURE, with a test NSS database.
+
+The database has the password PASSWORD, if it is non-nil."
+  (declare (indent 2) (debug t))
+  `(progn
+     (skip-unless (and (executable-find "openssl")
+                       (executable-find "certutil")
+                       (executable-find "pk12util")))
+     (let* ((pdf-form-test-dir (make-temp-file "pdf-form-test" t))
+            (file (expand-file-name ,fixture pdf-form-test-dir))
+            (pdf-info-nss-directory
+             (pdf-form-test-make-nss pdf-form-test-dir ,password))
+            (pdf-form-backup-directory
+             (expand-file-name "backups" pdf-form-test-dir)))
+       (copy-file ,fixture file)
+       (unwind-protect
+           (pdf-test-with-pdf file
+             (skip-unless (pdf-info-signing-p))
+             ;; Start the mode now that the server runs, even if
+             ;; `auto-mode-alist' started it when the server did not,
+             ;; which leaves it half set up.
+             (pdf-view-mode)
+             ;; Batch mode has no window to show the buffer.
+             (when (eq image-mode-winprops-alist t)
+               (setq image-mode-winprops-alist nil))
+             ,@body)
+         (delete-directory pdf-form-test-dir t)))))
+
+(defun pdf-form-test-signatures ()
+  "Return the validations of the signed fields of the document by name."
+  (delq nil
+        (mapcar (lambda (f)
+                  (let ((v (pdf-info-validatesignature (alist-get 'id f))))
+                    (unless (eq (alist-get 'signature-status v) 'not-found)
+                      (cons (alist-get 'name f) v))))
+                (pdf-form-fields '(1) #'pdf-form-signature-p))))
+
+(defun pdf-form-test-file-contents (file)
+  "Return the bytes of FILE."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally file)
+    (buffer-string)))
+
+(defun pdf-form-test-assert-signed (validation)
+  "Assert that VALIDATION is the intact signature of the test certificate."
+  (let-alist validation
+    (should (eq .signature-status 'valid))
+    ;; The test certificate is self-signed.
+    (should (memq .certificate-status '(untrusted-issuer unknown-issuer)))
+    (should (equal .signer "Sign Tester"))
+    (should (equal .subject-organization "pdf-tools"))))
+
+(ert-deftest pdf-form-signingcertificates ()
+  (pdf-form-test-with-signing "forms.pdf" nil
+    (let ((certs (pdf-info-signingcertificates)))
+      (should (= 1 (length certs)))
+      (let-alist (car certs)
+        (should (equal .id "signer"))
+        (should (equal .subject "Sign Tester"))
+        (should (equal .subject-organization "pdf-tools"))
+        (should (equal .issuer "Sign Tester"))
+        (should (string-match-p "\\`[0-9]\\{4\\}-" .expires))))))
+
+(ert-deftest pdf-form-sign-rectangle ()
+  (pdf-form-test-with-signing "forms.pdf" nil
+    (let ((before (pdf-form-test-file-contents file)))
+      (should-not (pdf-form-test-signatures))
+      (pdf-form-sign '(1 0.1 0.05 0.4 0.12) "signer" "Testing" "Clemson")
+      (should-not (buffer-modified-p))
+      (let ((sigs (pdf-form-test-signatures)))
+        (should (equal (mapcar #'car sigs) '("Signature")))
+        (pdf-form-test-assert-signed (cdar sigs)))
+      (let ((field (car (pdf-form-fields '(1) #'pdf-form-signature-p))))
+        (should (equal (mapcar (lambda (x) (/ (round (* x 100)) 100.0))
+                               (alist-get 'edges field))
+                       '(0.1 0.05 0.4 0.12))))
+      ;; The form is still there, and the unsigned version is kept.
+      (should (= 13 (length (pdf-form-fields '(1) (lambda (f)
+                                                   (not (pdf-form-signature-p f)))))))
+      (let ((backups (directory-files pdf-form-backup-directory t "\\.pdf\\'")))
+        (should (= 1 (length backups)))
+        (should (equal (pdf-form-test-file-contents (car backups)) before)))
+      ;; No temporary files are left next to the document.
+      (should (equal (directory-files pdf-form-test-dir nil "\\.pdf\\'")
+                     '("forms.pdf")))
+      ;; Signing again adds a second signature and keeps the first.
+      (pdf-form-sign '(1 0.5 0.05 0.8 0.12) "signer")
+      (let ((sigs (pdf-form-test-signatures)))
+        (should (equal (sort (mapcar #'car sigs) #'string<)
+                       '("Signature" "Signature2")))
+        (mapc (lambda (s) (pdf-form-test-assert-signed (cdr s))) sigs)))))
+
+(ert-deftest pdf-form-sign-field ()
+  (pdf-form-test-with-signing "sigfield.pdf" nil
+    (let ((field (pdf-form-test-field "approval")))
+      (should (pdf-form-unsigned-p field))
+      (should (equal (mapcar (lambda (f) (alist-get 'name f))
+                             (pdf-form-unsigned-fields))
+                     '("approval")))
+      (pdf-form-sign field "signer")
+      (let ((sigs (pdf-form-test-signatures)))
+        (should (equal (mapcar #'car sigs) '("approval-signed")))
+        (pdf-form-test-assert-signed (cdar sigs)))
+      ;; The signature covers the empty field, which no longer counts.
+      (let ((signed (pdf-form-test-field "approval-signed")))
+        (should (equal (alist-get 'edges signed) (alist-get 'edges field)))
+        (should (= 2 (length (pdf-form--signatures-at signed)))))
+      (should-not (pdf-form-unsigned-fields)))))
+
+(ert-deftest pdf-form-sign-password ()
+  (pdf-form-test-with-signing "forms.pdf" "secret"
+    (should (string-match-p
+             "NSS password required"
+             (error-message-string
+              (should-error (pdf-info-signingcertificates)))))
+    (should (string-match-p
+             "Wrong NSS password"
+             (error-message-string
+              (should-error (pdf-info-signingcertificates "wrong")))))
+    (let ((answers '("wrong" "secret")))
+      (cl-letf (((symbol-function 'read-passwd)
+                 (lambda (&rest _) (pop answers))))
+        (pdf-form-sign '(1 0.1 0.05 0.4 0.12) "signer"))
+      (should-not answers))
+    (pdf-form-test-assert-signed (cdar (pdf-form-test-signatures)))))
+
+(ert-deftest pdf-form-sign-unsaved ()
+  (pdf-form-test-with-signing "forms.pdf" nil
+    (let ((before (pdf-form-test-file-contents file)))
+      (pdf-form-fill '(("name" . "Ada")))
+      (should (buffer-modified-p))
+      ;; Declining to save refuses to sign and changes nothing.
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) nil)))
+        (should-error (pdf-form-sign '(1 0.1 0.05 0.4 0.12) "signer")
+                      :type 'user-error))
+      (should (buffer-modified-p))
+      (should (equal (pdf-form-test-file-contents file) before))
+      ;; Saving first signs the filled in form.
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+        (pdf-form-sign '(1 0.1 0.05 0.4 0.12) "signer"))
+      (should-not (buffer-modified-p))
+      (should (equal (cdr (assoc "name" (pdf-form-values))) "Ada"))
+      (pdf-form-test-assert-signed (cdar (pdf-form-test-signatures))))))
+
+(ert-deftest pdf-form-sign-interactive ()
+  (pdf-form-test-with-signing "sigfield.pdf" nil
+    ;; Take the defaults: the empty field and the only certificate.
+    (let (prompts)
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (prompt _coll &optional _pred _req _init _hist def &rest _)
+                   (push prompt prompts)
+                   def))
+                ((symbol-function 'read-string)
+                 (lambda (prompt &rest _)
+                   (push prompt prompts)
+                   (if (string-prefix-p "Reason" prompt) "Approved" ""))))
+        (call-interactively #'pdf-form-sign))
+      (should (string-prefix-p "Sign (default approval (page 1))" (car (last prompts))))
+      (should (= 4 (length prompts))))
+    (let ((sigs (pdf-form-test-signatures)))
+      (should (equal (mapcar #'car sigs) '("approval-signed")))
+      (pdf-form-test-assert-signed (cdar sigs)))
+    ;; Clicking on the signed field shows the signatures there.
+    (pdf-form-edit-field (pdf-form-test-field "approval"))
+    (with-current-buffer "*PDF Signatures*"
+      (should (string-match-p "approval-signed (page 1)\n  Signature: +valid"
+                              (buffer-string)))
+      (should (string-match-p "approval (page 1)\n  Signature: +unsigned"
+                              (buffer-string))))))
