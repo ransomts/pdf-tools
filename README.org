@@ -242,6 +242,7 @@ This also applies when updating via MELPA / NonGNU ELPA (except for running the 
 + SyncTeX :: Jump from a position on a page directly to the TeX source and vice versa.
 + Virtual :: Use a collection of documents as if it were one, big single PDF.
 + Pages :: Delete, extract, move and rotate pages, and insert pages of other PDFs, changing the file itself (needs the =qpdf= program). [[id:7740dc50-5c1c-4d94-b896-264066d06efa][More information here]].
++ Reflow :: Read the text of a PDF reflowed in reading order in a text buffer (=M-x pdf-reflow=), for a narrow window, a large font or a screen reader: a tagged PDF with its headings, lists, tables and the alternative text of figures, other PDFs page by page.  Every block shows its place in the PDF.
 + Accessibility :: Review a tagged PDF for what a conformance checker cannot judge (=M-x pdf-a11y-report=): figures and their alt text, the heading outline, the reading order of each page, untagged pages, language and fonts that are not embedded.
 + Present :: Give a talk from a PDF (=M-x pdf-present=): the slide alone on the projector, and a presenter view with the next slide, speaker notes from Beamer, a timer and the clock. [[id:0c1d7f3e-5b8a-4e52-9a51-2f6c3e7d8b41][More information here]].
 + Thumbnails :: Show the pages as a grid of thumbnails (=M-x pdf-thumbs= or ~T~) to find a page at a glance, and mark pages there to delete, extract, move or rotate them. [[id:8eb69b29-1f57-4c27-8d26-77aaea39bb71][More information here]].

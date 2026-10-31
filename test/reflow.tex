@@ -1,0 +1,54 @@
+% Tagged PDF/UA-2 fixture for test/pdf-reflow-test.el: headings on
+% three levels, a paragraph over several lines, a bulleted and a
+% numbered list, a table, a figure with alternative text and words
+% that are not ASCII.
+%
+% Rebuild reflow.pdf from this directory with (run twice for the
+% structure tree to settle):
+%
+%   lualatex reflow.tex && lualatex reflow.tex
+%
+% then delete the .aux and .log files.  The image comes from the mwe
+% package in TeX Live.
+\DocumentMetadata{lang=en, pdfstandard=ua-2, testphase=latest}
+\documentclass{article}
+\usepackage{graphicx}
+\title{Reflow Fixture}
+\author{pdf-tools}
+\date{}
+\begin{document}
+\maketitle
+\section{Reading order}
+This paragraph is long enough to be set on several lines of the page,
+so that its text has to be joined again when it is reflowed into a
+window of any width.  Some of its words are not plain ASCII: café,
+naïve, Straße.
+
+\subsection{Lists}
+A bulleted list:
+\begin{itemize}
+\item The first point.
+\item The second point.
+\end{itemize}
+A numbered list:
+\begin{enumerate}
+\item Step one.
+\item Step two.
+\end{enumerate}
+
+\subsubsection{A table}
+\begin{tabular}{ll}
+  Name & Value \\
+  alpha & 1 \\
+  beta & 2 \\
+\end{tabular}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=3cm,alt={A grey placeholder rectangle}]{example-image}
+\end{figure}
+
+\newpage
+\section{Second page}
+Text on the second page.
+\end{document}
