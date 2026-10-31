@@ -1,0 +1,266 @@
+% A guided tour of the features on the `tim' branch, one page per
+% feature.  README.org in this directory says what to try on each page.
+% Build with ./build.sh, which also adds what LaTeX can't write: the
+% empty signature field on the signatures page and the attachment.
+\DocumentMetadata{lang=en, pdfstandard=ua-2, testphase=latest}
+\documentclass[11pt]{article}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{ocgx2}
+% ocgx2 puts a hidden push button on every page to work around an
+% Acrobat bug; pdf-form would list those as fields of the form.
+\ExplSyntaxOn
+\AddToHook{begindocument/end}{\bool_gset_false:N \g_pbs_ocgbase_loaded_bool}
+\ExplSyntaxOff
+\usepackage{hyperref}
+\hypersetup{
+  pdftitle={pdf-tools feature tour},
+  pdfauthor={Tim Ransom},
+  pdfsubject={What the tim branch of pdf-tools adds},
+  pdfkeywords={pdf-tools, Emacs, demo},
+  colorlinks=true, linkcolor=blue!60!black}
+\pagestyle{plain}
+\setlength{\parskip}{0.6em}
+\setlength{\parindent}{0pt}
+
+% The tagging code closes the marked content that ocgx2 opens for a
+% layer as soon as the next paragraph starts, leaving the layer empty,
+% so the layers are left out of the structure tree.
+\newenvironment{layer}[3]
+  {\par\SuspendTagging{layer}\begin{ocg}[printocg=never]{#1}{#2}{#3}}
+  {\end{ocg}\par\ResumeTagging{layer}}
+
+\newcommand{\key}[1]{\texttt{#1}}
+\newcommand{\try}[1]{\par\medskip\fcolorbox{orange!70!black}{orange!8}{%
+    \parbox{\dimexpr\linewidth-2\fboxsep-2\fboxrule}{\textbf{Try:} #1}}\par}
+\newcommand{\target}[2]{\fbox{\parbox[c][#2][c]{#1}{\centering\color{gray}target}}}
+
+\title{pdf-tools feature tour}
+\author{The \texttt{tim} branch}
+\date{}
+
+\begin{document}
+
+% ---------------------------------------------------------------- 1
+\maketitle
+\thispagestyle{plain}
+
+This PDF has one page for each thing the \texttt{tim} branch adds to pdf-tools. Each page says what to try in an orange box; \texttt{demo/README.org} has the same steps as a checklist, with the commands spelled out.
+
+Work on a copy: several features write to the file. \texttt{./build.sh} makes a fresh one any time.
+
+\section*{Contents}
+\begin{enumerate}
+\item[\pageref{p:select}] \hyperref[p:select]{Selecting, copying and reflowing text}
+\item[\pageref{p:annot}] \hyperref[p:annot]{Annotations: shapes, free text, ink, stamps; move and resize}
+\item[\pageref{p:xfdf}] \hyperref[p:xfdf]{Exchanging and flattening annotations}
+\item[\pageref{p:form}] \hyperref[p:form]{Forms and CSV}
+\item[\pageref{p:sign}] \hyperref[p:sign]{Signatures and certificates}
+\item[\pageref{p:layers}] \hyperref[p:layers]{Layers}
+\item[\pageref{p:pages}] \hyperref[p:pages]{Thumbnails, page operations and undo}
+\item[\pageref{p:attach}] \hyperref[p:attach]{Attachments and metadata}
+\item[\pageref{p:a11y}] \hyperref[p:a11y]{Accessibility report}
+\item[\pageref{p:present}] \hyperref[p:present]{Presenting}
+\end{enumerate}
+
+\try{Click a line of the contents to follow its link.}
+
+% ---------------------------------------------------------------- 2
+\newpage
+\section{Selecting, copying and reflowing text}\label{p:select}
+
+Selection now works the way it does in other PDF viewers. A double click selects the word under the mouse and a triple click selects the line; keep the button down after the second or third click and drag to extend the selection by whole words or lines. Shift and a click moves the end of the selection to where you clicked.
+
+The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs. How vexingly quick daft zebras jump. Sphinx of black quartz, judge my vow. The five boxing wizards jump quickly.
+
+\begin{center}
+\includegraphics[width=0.45\linewidth, alt={A grey test picture with the letter A}]{example-image-a}
+\end{center}
+
+The picture above can be copied as an image: select a region around it, or copy the whole page.
+
+\try{Double-click \emph{quartz}, then triple-click the same line. Drag after a double click. \key{S-mouse-1} on a later word. \key{M-w} copies the text.\par
+Select a region around the picture and press \key{C-c C-r c}; paste it into an image editor or a chat. With no region it copies the whole page; \key{C-u 3 C-c C-r c} renders three times as wide.\par
+\key{M-x pdf-reflow} shows this document's text reflowed, with headings, in a buffer of its own; \key{RET} on a block jumps back here.}
+
+% ---------------------------------------------------------------- 3
+\newpage
+\section{Annotations}\label{p:annot}
+
+New annotation types: squares, circles, lines, stamps, free text and free-hand ink. Select a region with the mouse first (for a line, its drag sets the two ends), then use a key or the right-click menu.
+
+\begin{tabular}{@{}ll@{}}
+\target{6cm}{2.2cm} & \target{6cm}{2.2cm}\\[0.1em]
+\small square \key{C-c C-a r} & \small circle \key{C-c C-a c}\\[0.8em]
+\target{6cm}{2.2cm} & \target{6cm}{2.2cm}\\[0.1em]
+\small line \key{C-c C-a L} & \small stamp \key{C-c C-a S}\\[0.8em]
+\target{6cm}{2.2cm} & \target{6cm}{2.2cm}\\[0.1em]
+\small free text \key{C-c C-a f} & \small ink \key{C-c C-a i}, then \key{RET}\\
+\end{tabular}
+
+\try{Make one of each in the boxes above. Right-click a square for \emph{Change fill color}.\par
+Drag an annotation to move it; \key{S-}drag one of its corners to resize it. Or right-click it, pick \emph{Move or resize}, and use the arrow keys (\key{S-}arrows resize).\par
+\key{M-x pdf-annot-add-image-stamp-annotation} on a region places \texttt{signature.png} (or any PNG) as a stamp.\par
+\key{C-c C-a l} lists every annotation; save the buffer with \key{C-x C-s}.}
+
+% ---------------------------------------------------------------- 4
+\newpage
+\section{Exchanging and flattening annotations}\label{p:xfdf}
+
+XFDF is the annotation exchange format that Acrobat, Okular and Foxit read. Grade one copy of an exam, export its annotations, and send the small XFDF file with the blank original instead of a modified PDF.
+
+Flattening makes filled-in forms and annotations part of the page, so the document looks the same in every viewer and can no longer be edited by accident. It uses \texttt{qpdf}.
+
+\try{After the annotations page: \key{M-x pdf-xfdf-export} writes \texttt{tour.xfdf}. Run \texttt{./build.sh} for a fresh copy (or delete the annotations), open it, and \key{M-x pdf-xfdf-import} puts them back.\par
+After filling in the form on the next page: \key{C-c C-o f} flattens it. \key{C-/} undoes that.}
+
+% ---------------------------------------------------------------- 5
+\newpage
+\section{Forms and CSV}\label{p:form}
+
+\begin{Form}
+\begin{tabular}{@{}l l@{}}
+Name: & \TextField[name=name, width=7cm]{}\\[1.2em]
+Email: & \TextField[name=email, width=7cm]{}\\[1.2em]
+Course: & \ChoiceMenu[name=course, combo=true, edit=false, default=CPSC 1010, width=4cm]{}{CPSC 1010,CPSC 2120,CPSC 2920,CPSC 4300}\\[1.2em]
+Role: & \ChoiceMenu[name=role, combo=true, edit=true, default=Student, width=4cm]{}{Student,TA,Instructor}\\[1.2em]
+Topics: & \ChoiceMenu[name=topics, multiselect=true, width=4cm, height=2.2cm]{}{Pointers,Recursion,Graphs,Testing}\\[3em]
+Notes: & \TextField[name=notes, multiline=true, width=10cm, height=2cm]{}\\[2.6em]
+& \CheckBox[name=consent]{I agree to be in the demo}
+\end{tabular}
+\end{Form}
+
+\try{Click a field to fill it in; \key{TAB} and \key{S-TAB} move between fields, \key{C-c C-e} picks one by name, \key{C-c C-s} hides the field marks, \key{M-x pdf-form-reset} clears the form. \key{C-x C-s} saves.\par
+\key{C-c C-f e} exports the values to CSV. \key{C-c C-f i} fills the form from \texttt{roster.csv}. \key{C-c C-f b} on \texttt{batch/roster.csv} fills in the three blank copies in \texttt{batch/}, one row each.}
+
+% ---------------------------------------------------------------- 6
+\newpage
+\section{Signatures and certificates}\label{p:sign}
+
+The box at the bottom of this page is an empty signature field named \emph{approval}. A digital signature needs a certificate; \key{M-x pdf-form-certificates} manages the NSS database poppler signs with, and can make a self-signed one for trying this out.
+
+A signature with an image is the everyday kind: the picture of your signature is placed and flattened into the page. It does not certify who signed.
+
+\try{\key{M-x pdf-form-certificates}, then \key{n} to create a self-signed certificate (or \key{i} to import a \texttt{.p12}).\par
+Click the empty field below to sign into it, or \key{M-x pdf-form-sign} and select a rectangle elsewhere. The signed file replaces this one. Click the field again, or \key{M-x pdf-form-signatures}, to check the signature.\par
+\key{M-x pdf-form-sign-with-image} uses \texttt{signature.png}.}
+
+\vfill
+\hfill\parbox{8.6cm}{\centering{\color{blue!50}\framebox[8.5cm]{\rule{0pt}{2.4cm}}}\par
+  \small\color{gray} empty signature field \emph{approval} (added by \texttt{build.sh})}
+
+% ---------------------------------------------------------------- 7
+\newpage
+\section{Layers}\label{p:layers}
+
+Some PDFs put content on layers that a viewer shows or hides: CAD drawings, maps, and exams with the answers on a hidden layer. This page has three.
+
+\textbf{Question.} What does \texttt{git rebase} do that \texttt{git merge} doesn't?
+
+\begin{layer}{Hint}{hint}{1}
+\textcolor{blue!60!black}{\textbf{Hint.} Look at the shape of the history afterwards.}
+\end{layer}
+
+\begin{layer}{Answer}{answer}{0}
+\textcolor{green!40!black}{\textbf{Answer.} It replays your commits on top of the other branch, so the history stays a straight line instead of gaining a merge commit.}
+\end{layer}
+
+\begin{layer}{Draft watermark}{draft}{1}
+\begin{center}\color{red!25}\fontsize{60}{60}\selectfont DRAFT\end{center}
+\end{layer}
+
+\try{\key{C-c C-l} (or \key{M-x pdf-layers}) lists the layers; \key{RET}, \key{SPC} or \key{t} toggles the one at point, \key{+} and \key{-} show and hide it.\par
+This link works too: \toggleocgs{answer}{\textcolor{blue}{\underline{show or hide the answer}}}.\par
+Layers are view state: reverting the buffer resets them.}
+
+% ---------------------------------------------------------------- 8
+\newpage
+\section{Thumbnails, page operations and undo}\label{p:pages}
+
+The next four pages are here to be fixed. One is upside down, one shouldn't be here at all, and two are in the wrong order.
+
+\try{\key{T} shows every page as a thumbnail; \key{RET} or a click goes to one.\par
+In the grid, mark pages with \key{m} (\key{u}, \key{U} unmark) and \key{D} delete, \key{X} extract to a new file, \key{M} move, \key{R} / \key{L} rotate them.\par
+In the document itself: \key{C-c C-o r} rotates the current page, \key{C-c C-o d} deletes it, \key{C-c C-o m} moves it; \key{C-u} first asks for a range such as \texttt{9-10}.\par
+\key{C-/} undoes the last page operation, one at a time.}
+
+% ---------------------------------------------------------------- 9
+\newpage
+\thispagestyle{empty}
+\vspace*{\fill}
+\begin{center}
+\rotatebox{180}{\parbox{12cm}{\centering\Huge This page is upside down.\par\bigskip\Large Rotate it twice with \key{C-c C-o r}.}}
+\end{center}
+\vspace*{\fill}
+
+% ---------------------------------------------------------------- 10
+\newpage
+\thispagestyle{empty}
+\vspace*{\fill}
+\begin{center}
+{\Huge Delete this page.}\par\bigskip
+{\Large \key{C-c C-o d}, or \key{D} in the thumbnail grid.}
+\end{center}
+\vspace*{\fill}
+
+% ---------------------------------------------------------------- 11
+\newpage
+\thispagestyle{empty}
+\vspace*{\fill}
+\begin{center}
+{\Huge Part 2 of 2}\par\bigskip
+{\Large This page should come after \emph{Part 1}.\par Move it with \key{C-c C-o m}, or \key{M} in the grid.}
+\end{center}
+\vspace*{\fill}
+
+% ---------------------------------------------------------------- 12
+\newpage
+\thispagestyle{empty}
+\vspace*{\fill}
+\begin{center}
+{\Huge Part 1 of 2}
+\end{center}
+\vspace*{\fill}
+
+% ---------------------------------------------------------------- 13
+\newpage
+\section{Attachments and metadata}\label{p:attach}
+
+A PDF can carry files of its own, such as the data behind a chart, or the roster a form was filled from. This one carries \texttt{roster.csv}.
+
+Its metadata (title, author, subject, keywords) can be edited too. Writing a new title only changes the document information dictionary; a warning says so when the XMP title, which accessibility checkers read, now differs.
+
+\try{\key{C-c C-a A} lists the document's attachments in Dired; \key{C-c C-a +} attaches a file, \key{C-c C-a -} removes one.\par
+\key{I} shows the metadata and \key{e} there edits it (or \key{M-x pdf-misc-edit-metadata}): \key{C-c C-c} applies, then save the buffer.}
+
+% ---------------------------------------------------------------- 14
+\newpage
+\section{Accessibility report}\label{p:a11y}
+
+This document is tagged (PDF/UA-2), so its structure can be checked. A conformance checker such as veraPDF cannot tell whether alt text is any good or the headings make sense; the report lists what a person has to look at.
+
+\begin{center}
+\includegraphics[width=0.3\linewidth, alt={A grey test picture with the letter B}]{example-image-b}
+\hspace{2em}
+\includegraphics[width=0.3\linewidth, alt={example-image-c.png}]{example-image-c}
+\end{center}
+
+The left picture has real alt text. The right one's alt text is only a file name, which the report flags.
+
+\subsection*{A heading one level down}
+The report shows the headings in reading order and flags skipped levels.
+
+\try{\key{M-x pdf-a11y-report}. Every entry is a button that shows the element in the PDF.}
+
+% ---------------------------------------------------------------- 15
+\newpage
+\section{Presenting}\label{p:present}
+
+\texttt{demo-slides.pdf}, next to this file, is a short Beamer deck with speaker notes on the right half of each page, the way \texttt{show notes on second screen=right} builds them.
+
+\try{Open \texttt{demo-slides.pdf} and \key{M-x pdf-present} (\key{C-u} first to pick the audience's monitor). The audience window shows the slide alone; the presenter window shows the current and next slides, the notes, the timers and the clock.\par
+\key{n} / \key{p} or the arrow keys move; \key{g} goes to a slide; \key{T} picks one from a thumbnail grid; \key{b} / \key{w} blank the screen; \key{d} sets the talk length for the countdown; \key{t} / \key{r} pause or reset the timer; \key{q} quits.\par
+Rebuild the deck while presenting (\texttt{./build.sh}): the slides reload in place.}
+
+\end{document}

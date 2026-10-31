@@ -1,0 +1,2 @@
+name,email,course,role,notes,consent
+Ada Lovelace,ada@example.edu,CPSC 2920,Student,Filled in from roster.csv by C-c C-f i.,yes
