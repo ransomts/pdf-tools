@@ -967,6 +967,17 @@ t or nil signals an error."
           ;; The new annotation is on page 1 and therefore listed first.
           (should (eq (car (listed)) (pdf-annot-get-id a))))))))
 
+(ert-deftest pdf-annot-test-listed-types-without-markup ()
+  "Markup types are left out where the server has no support for them."
+  (cl-letf (((symbol-function 'pdf-info-markup-annotations-p) #'ignore))
+    ;; The default lists the markup types; it is filtered, not
+    ;; computed, when the list is filled.
+    (should (equal (pdf-annot--listed-types) '(text file)))
+    (let ((pdf-annot-list-listed-types '(text file highlight squiggly)))
+      (should (equal (pdf-annot--listed-types) '(text file)))))
+  (let ((pdf-annot-list-listed-types '(text file highlight)))
+    (should (equal (pdf-annot--listed-types) '(text file highlight)))))
+
 (ert-deftest pdf-annot-test-list-entries ()
   "Entries honour `pdf-annot-list-listed-types' and come sorted."
   (pdf-annot-test-with-pdf "test.pdf"
@@ -1221,6 +1232,38 @@ t or nil signals an error."
           (should (stringp (pdf-annot-print-property square
                                                      'interior-color))))))))
 
+(ert-deftest pdf-annot-add-image-stamp-annotation ()
+  (skip-unless (pdf-info-image-stamps-p))
+  (pdf-test-with-test-pdf
+    (let ((pdf-annot-activate-created-annotations nil))
+      (cl-letf (((symbol-function 'pdf-util-assert-pdf-window) #'ignore)
+                ;; The test buffer is not in pdf-view-mode.
+                ((symbol-function 'pdf-util-pdf-buffer-p)
+                 (lambda (&rest _) t)))
+        ;; The image is 60x20 pixels (aspect 3); a region too wide
+        ;; for it keeps its height, one too high keeps its width.
+        (let ((stamp (pdf-annot-add-image-stamp-annotation
+                      '(1 (0.1 0.1 0.8 0.3))
+                      (expand-file-name "signature.png"))))
+          (should (eq 'stamp (pdf-annot-get-type stamp)))
+          (should (null (pdf-annot-get stamp 'icon)))
+          ;; The height of the region, 0.2, is kept.
+          (should (equal '(0.15 0.1 0.75 0.3)
+                         (mapcar (lambda (x) (/ (round (* x 1000)) 1000.0))
+                                 (pdf-annot-get stamp 'edges)))))
+        (let ((stamp (pdf-annot-add-image-stamp-annotation
+                      '(1 (0.1 0.1 0.3 0.6))
+                      (expand-file-name "signature.png"))))
+          ;; The width of the region, 0.2, is kept.
+          (should (equal '(0.1 0.316667 0.3 0.383333)
+                         (mapcar (lambda (x) (/ (round (* x 1000000)) 1000000.0))
+                                 (pdf-annot-get stamp 'edges)))))
+        (should-error (pdf-annot-add-image-stamp-annotation
+                       '(1 (0.1 0.1 0.5 0.3))
+                       (expand-file-name "test.pdf")))
+        ;; Two image stamps and no others.
+        (should (= 2 (length (pdf-annot-getannots nil '(stamp)))))))))
+
 (ert-deftest pdf-annot-context-menu-shapes ()
   (let ((square '((type . square) (id . annot-1-0)))
         (stamp '((type . stamp) (id . annot-1-1))))
@@ -1351,6 +1394,9 @@ t or nil signals an error."
                      '(1 (0.1 0.1 0.2 0.2)))))))
 
 (ert-deftest pdf-annot-keys-free-text-ink ()
+  ;; The keys are bound when the mode is on; bind them here, as the
+  ;; test can run before any PDF buffer was shown.
+  (pdf-annot--bind-server-keys)
   (should (eq (and (pdf-info-free-text-annotations-p)
                    'pdf-annot-add-free-text-annotation)
               (lookup-key pdf-annot-minor-mode-map (kbd "C-c C-a f"))))

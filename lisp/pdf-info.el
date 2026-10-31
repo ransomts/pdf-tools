@@ -1174,6 +1174,10 @@ A No-op, if BUFFER has not running server instance."
 (defun pdf-info-stamp-annotations-p ()
   "Return non-nil, if stamp annotations can be created."
   (not (null (memq 'stamp-annotations (pdf-info-features)))))
+
+(defun pdf-info-image-stamps-p ()
+  "Return non-nil, if stamps showing a PNG image can be created."
+  (not (null (memq 'image-stamps (pdf-info-features)))))
 (defun pdf-info-layers-p ()
   "Return non-nil if the server can show and hide layers."
   (not (null (memq 'layers (pdf-info-features)))))
@@ -1709,7 +1713,8 @@ For a `line' it may be a single list \(X1 Y1 X2 Y2\) of its
 start and end point, which then also determines its edges;
 otherwise the line goes from the top-left to the bottom-right
 corner of EDGES.  For a `stamp' it may be a single string naming
-one of `pdf-info-standard-stamp-icons'.  For `ink' these are the
+one of `pdf-info-standard-stamp-icons', or \"image:FILE\", for a
+stamp showing the PNG image in FILE.  For `ink' these are the
 strokes, each a list \(X1 Y1 X2 Y2 ...\) of the points the pen
 went through, optionally preceded by the line width in points as
 a string; the strokes then determine the edges.  Other types,

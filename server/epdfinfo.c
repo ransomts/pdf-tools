@@ -168,6 +168,7 @@ free_document (document_t *doc)
               annotation_t *a = (annotation_t*) item->data;
               poppler_annot_mapping_free(a->amap);
               g_free (a->key);
+              g_free (a->image_file);
               g_free (a);
             }
           g_list_free (annots);
@@ -1611,6 +1612,7 @@ annoation_get_for_page (document_t *doc, gint pn)
       annotation_t *a = g_malloc (sizeof (annotation_t));
       a->amap = map;
       a->key = key;
+      a->image_file = NULL;
       doc->annotations.pages[pn - 1] =
         g_list_prepend (doc->annotations.pages[pn - 1], a);
       assert (NULL == g_hash_table_lookup (doc->annotations.keys, key));
@@ -1970,6 +1972,117 @@ annotation_ink_translate (PopplerAnnotInk *a, double dx, double dy)
  * @return The new annotation, or NULL, if the annotation type is
  *         not available.
  */
+
+#ifdef HAVE_POPPLER_ANNOT_STAMP
+#if CAIRO_HAS_PNG_FUNCTIONS
+
+/* Load the PNG image in FILENAME as a cairo surface, or return NULL
+   and set ERROR_MSG.
+
+   The pixels of the returned surface are *PIXELS, which must be freed
+   with g_free () once poppler has copied them; it is NULL when the
+   image was not copied, see below.
+
+   poppler's get_raw_data_from_cairo_image () steps a pointer four
+   bytes along before it reads the alpha byte of a pixel, so on the
+   last pixel of the last row of an image it reads up to three bytes
+   past the end of the pixel data, which the address sanitizer reports
+   as a heap-buffer-overflow (seen in poppler 24.02 through at least
+   25.03, in glib/poppler-annot.cc).  A surface of our own, with four
+   spare bytes after the pixels, keeps that read inside an allocation
+   and leaves the image and the way poppler turns it into an XObject
+   untouched. */
+static cairo_surface_t *
+xcairo_image_surface_from_png (const char *filename, unsigned char **pixels,
+                               char **error_msg)
+{
+  cairo_surface_t *png = cairo_image_surface_create_from_png (filename);
+  cairo_status_t status = cairo_surface_status (png);
+  cairo_surface_t *surface;
+  cairo_format_t format;
+  cairo_t *cr;
+  int width, height, stride;
+
+  *pixels = NULL;
+  if (status != CAIRO_STATUS_SUCCESS)
+    {
+      if (error_msg)
+        *error_msg = g_strdup_printf
+          ("Cannot read a PNG image from `%s': %s",
+           filename, cairo_status_to_string (status));
+      cairo_surface_destroy (png);
+      return NULL;
+    }
+
+  /* Leave any other kind of image to poppler, which has a better
+     error message for it than we would have here. */
+  format = cairo_image_surface_get_format (png);
+  if (format != CAIRO_FORMAT_ARGB32 && format != CAIRO_FORMAT_RGB24)
+    return png;
+
+  width = cairo_image_surface_get_width (png);
+  height = cairo_image_surface_get_height (png);
+  stride = cairo_format_stride_for_width (format, width);
+  /* The four spare bytes, see above. */
+  *pixels = g_malloc0 ((size_t) stride * (size_t) height + 4);
+  surface = cairo_image_surface_create_for_data (*pixels, format,
+                                                 width, height, stride);
+  cr = cairo_create (surface);
+  cairo_set_operator (cr, CAIRO_OPERATOR_SOURCE);
+  cairo_set_source_surface (cr, png, 0, 0);
+  cairo_paint (cr);
+  cairo_surface_destroy (png);
+
+  status = cairo_status (cr);
+  cairo_destroy (cr);
+  if (status != CAIRO_STATUS_SUCCESS)
+    {
+      if (error_msg)
+        *error_msg = g_strdup_printf
+          ("Cannot copy the PNG image from `%s': %s",
+           filename, cairo_status_to_string (status));
+      cairo_surface_destroy (surface);
+      g_free (*pixels);
+      *pixels = NULL;
+      return NULL;
+    }
+  return surface;
+}
+
+/* Make the stamp annotation A show the PNG image in FILENAME.
+   Return TRUE on success, FALSE (setting ERROR_MSG) otherwise. */
+static gboolean
+annotation_stamp_set_image (PopplerAnnotStamp *a, const char *filename,
+                            char **error_msg)
+{
+  unsigned char *pixels;
+  cairo_surface_t *surface = xcairo_image_surface_from_png (filename,
+                                                            &pixels,
+                                                            error_msg);
+  GError *gerror = NULL;
+  gboolean ok;
+
+  if (! surface)
+    return FALSE;
+  ok = poppler_annot_stamp_set_custom_image (a, surface, &gerror);
+  cairo_surface_destroy (surface);
+  /* poppler copied the pixels by now. */
+  g_free (pixels);
+  if (! ok)
+    {
+      if (error_msg)
+        *error_msg = g_strdup_printf
+          ("Setting the image of the stamp failed: %s",
+           gerror ? gerror->message : "Reason unknown");
+      if (gerror)
+        g_error_free (gerror);
+    }
+  return ok;
+}
+
+#endif /* CAIRO_HAS_PNG_FUNCTIONS */
+#endif /* HAVE_POPPLER_ANNOT_STAMP */
+
 static PopplerAnnot*
 annotation_new (const epdfinfo_t *ctx, document_t *doc, PopplerPage *page,
                 const char *type, PopplerSelectionStyle selection_style,
@@ -2039,10 +2152,31 @@ annotation_new (const epdfinfo_t *ctx, document_t *doc, PopplerPage *page,
       const char *name = nargs > 0 ? rest->value.rest.args[0] : "";
 
       cerror_if_not (nargs <= 1, error_msg, "%s", "Too many arguments");
-      /* An empty name or Draft keeps poppler's default icon, Draft. */
-      cerror_if_not (! *name || ! strcmp (name, "Draft")
-                     || xpoppler_annot_stamp_icon_parse (name, &icon),
-                     error_msg, "Unknown stamp icon: %s", name);
+      if (! strncmp (name, "image:", 6))
+        {
+          /* A stamp showing the PNG image in the named file.  The
+             image is set once the annotation is on the page, see
+             cmd_addannot; check now that it can be read. */
+#if CAIRO_HAS_PNG_FUNCTIONS
+          unsigned char *pixels;
+          cairo_surface_t *surface =
+            xcairo_image_surface_from_png (name + 6, &pixels, error_msg);
+          if (! surface)
+            goto error;
+          cairo_surface_destroy (surface);
+          g_free (pixels);
+#else
+          cerror_if_not (0, error_msg, "%s",
+                         "This epdfinfo cannot read PNG images");
+#endif
+        }
+      else
+        {
+          /* An empty name or Draft keeps poppler's default icon, Draft. */
+          cerror_if_not (! *name || ! strcmp (name, "Draft")
+                         || xpoppler_annot_stamp_icon_parse (name, &icon),
+                         error_msg, "Unknown stamp icon: %s", name);
+        }
       a = poppler_annot_stamp_new (doc->pdf, r);
       if (icon != POPPLER_ANNOT_STAMP_ICON_UNKNOWN)
         poppler_annot_stamp_set_icon (POPPLER_ANNOT_STAMP (a), icon);
@@ -2621,6 +2755,11 @@ cmd_features (const epdfinfo_t *ctx, const command_arg_t *args)
     "stamp-annotations",
 #else
     "no-stamp-annotations",
+#endif
+#if defined (HAVE_POPPLER_ANNOT_STAMP) && CAIRO_HAS_PNG_FUNCTIONS
+    "image-stamps",
+#else
+    "no-image-stamps",
 #endif
 #ifdef HAVE_POPPLER_ANNOT_FREE_TEXT
     "free-text-annotations",
@@ -4536,7 +4675,8 @@ cmd_getattachments (const epdfinfo_t *ctx, const command_arg_t *args)
    text, square, circle: none,
    line: optionally the relative start and end point "X1 Y1 X2 Y2"
    (default: from the top-left to the bottom-right corner of edges),
-   stamp: optionally a standard icon name, e.g. Approved,
+   stamp: optionally a standard icon name, e.g. Approved, or
+   "image:FILENAME" for a stamp showing the PNG image in FILENAME,
    free-text: none; set its text with editannot's contents and its
    font with font-name, font-size and font-color,
    ink: optionally the line width in points, followed by one or more
@@ -4609,10 +4749,31 @@ cmd_addannot (const epdfinfo_t *ctx, const command_arg_t *args)
   a = g_malloc (sizeof (annotation_t));
   a->amap = amap;
   a->key = key;
+  a->image_file = NULL;
   doc->annotations.pages[pn - 1] =
     g_list_prepend (annotations, a);
   g_hash_table_insert (doc->annotations.keys, key, a);
   poppler_page_add_annot (page, pa);
+#ifdef HAVE_POPPLER_ANNOT_STAMP
+  if (POPPLER_IS_ANNOT_STAMP (pa)
+      && args[5].value.rest.nargs > 0
+      && ! strncmp (args[5].value.rest.args[0], "image:", 6))
+    {
+      /* The image of the stamp can only be set now that the
+         annotation is on the page: adding it moves the annotation,
+         and moving drops the appearance it would have been given. */
+#if CAIRO_HAS_PNG_FUNCTIONS
+      perror_if_not (annotation_stamp_set_image
+                     (POPPLER_ANNOT_STAMP (pa),
+                      args[5].value.rest.args[0] + 6, &error_msg),
+                    "Creating annotation failed: %s",
+                    error_msg ? error_msg : "Reason unknown");
+      /* Remember it, so that it survives moving the annotation,
+         which drops the appearance again. */
+      a->image_file = g_strdup (args[5].value.rest.args[0] + 6);
+#endif
+    }
+#endif
 #ifdef HAVE_POPPLER_ANNOT_INK
   if (POPPLER_IS_ANNOT_INK (pa))
     {
@@ -4668,6 +4829,7 @@ cmd_delannot (const epdfinfo_t *ctx, const command_arg_t *args)
   if (a)
     {
       g_free (a->key);
+      g_free (a->image_file);
       g_free (a);
     }
   if (page) g_object_unref (page);
@@ -4777,6 +4939,21 @@ cmd_editannot (const epdfinfo_t *ctx, const command_arg_t *args)
           else
 #endif
             poppler_annot_set_rectangle (pa, area);
+
+#ifdef HAVE_POPPLER_ANNOT_STAMP
+          /* Moving drops the appearance of an image stamp; put the
+             image back on. */
+          if (a->image_file)
+            {
+#if CAIRO_HAS_PNG_FUNCTIONS
+              perror_if_not (annotation_stamp_set_image
+                             (POPPLER_ANNOT_STAMP (pa),
+                              a->image_file, &error_msg),
+                            "Moving the annotation failed: %s",
+                            error_msg ? error_msg : "Reason unknown");
+#endif
+            }
+#endif
         }
       else if (! strcmp (key, "label"))
         {

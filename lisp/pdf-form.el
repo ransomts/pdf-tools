@@ -52,6 +52,8 @@
 (require 'pdf-info)
 (require 'pdf-cache)
 (require 'pdf-util)
+(require 'pdf-annot)
+(require 'pdf-pages)
 (require 'let-alist)
 (require 'cl-lib)
 (require 'crm)
@@ -1067,6 +1069,75 @@ in `pdf-form-backup-directory'."
              (file-name-nondirectory file)
              (or (alist-get 'subject cert) (alist-get 'id cert))
              (abbreviate-file-name backup))))
+
+(defcustom pdf-form-signature-image nil
+  "The PNG file with an image of your signature.
+`pdf-form-sign-with-image' places it on the page and flattens it
+into the document.  If nil, the command reads the file name every
+time."
+  :type '(choice (const :tag "Ask for the file every time" nil)
+                 (file :tag "Image file")))
+
+(defun pdf-form--read-signature-image ()
+  "Read the name of a PNG file with a signature image."
+  (read-file-name "Signature image (PNG file): "))
+
+(defun pdf-form-sign-with-image (place &optional image)
+  "Sign the document at PLACE with an image of your signature.
+
+PLACE is an empty signature field or a cons (PAGE . EDGES) of a
+rectangle of relative EDGES, as in `pdf-form-sign'.  Interactively,
+choose one of the empty fields of the document, or a new place in
+the active region or in a rectangle selected with the mouse.
+
+The signature is a stamp annotation showing IMAGE, a PNG file
+(`pdf-form-signature-image' by default, read from the user
+otherwise), that fills PLACE and keeps the aspect ratio of the
+image.  It is flattened into the page right away, so that the
+signed document looks the same in every PDF viewer; the previous
+version is kept for `pdf-pages-undo'.
+
+This is a signature in the everyday sense, a picture of your
+handwritten name, not a digital one: unlike `pdf-form-sign', it
+does not certify who signed.  It needs the epdfinfo server to
+support image stamps and the qpdf program, version 11.8 or
+later, see `pdf-pages-qpdf-program'."
+  (interactive
+   (progn
+     (pdf-util-assert-pdf-buffer)
+     (unless (pdf-info-image-stamps-p)
+       (user-error "Image stamps are not supported by this version of \
+epdfinfo (requires poppler-glib >= 22.07 and PNG support in cairo)"))
+     (pdf-form--assert-file)
+     (list (pdf-form--read-signature-place)
+           (or pdf-form-signature-image
+               (pdf-form--read-signature-image)))))
+  (unless (pdf-info-image-stamps-p)
+    (user-error "Image stamps are not supported by this version of epdfinfo"))
+  (let ((file (pdf-form--assert-file))
+        (image (or image pdf-form-signature-image)))
+    (unless image
+      (user-error "No signature image given"))
+    (setq image (expand-file-name image))
+    ;; Check that flattening can run before changing anything.
+    (unless (pdf-pages--qpdf-version-at-least '(11 8))
+      (user-error "Signing with an image needs the qpdf program version \
+11.8 or later, not %s; see `pdf-pages-qpdf-program'"
+                  (mapconcat #'number-to-string
+                             (pdf-pages--qpdf-version) ".")))
+    (pdf-annot-add-image-stamp-annotation
+     (if (pdf-form-signature-p place)
+         (cons (alist-get 'page place)
+               (list (alist-get 'edges place)))
+       (cons (car place) (list (cdr place))))
+     image)
+    ;; Write the stamp into the file and flatten it into the page.
+    (save-buffer)
+    (let (pdf-pages-confirm)
+      (pdf-pages-flatten-annotations))
+    (message "Signed `%s' with an image; the unsigned version is kept \
+for `pdf-pages-undo'"
+             (file-name-nondirectory file))))
 
 (defun pdf-form--prepare-signing ()
   "Check that the buffer can be signed, before asking anything."

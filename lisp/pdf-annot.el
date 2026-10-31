@@ -257,11 +257,16 @@ Line annotations can not be moved this way."
   "Complete list of annotation types.")
 
 (defcustom pdf-annot-list-listed-types
-  (if (pdf-info-markup-annotations-p)
-      (list 'text 'file 'squiggly 'highlight 'underline 'strike-out
-            'square 'circle 'line 'stamp 'free-text 'ink)
-    (list 'text 'file))
-  "A list of annotation types displayed in the list buffer."
+  (list 'text 'file 'squiggly 'highlight 'underline 'strike-out
+        'square 'circle 'line 'stamp 'free-text 'ink)
+  "A list of annotation types displayed in the list buffer.
+
+Markup annotations are not listed where the epdfinfo server cannot
+handle them; see `pdf-annot--listed-types'.  That is checked when
+the list is filled, not here: the default of a `defcustom' is
+evaluated when this library is loaded, and asking the server then
+would make `pdf-annot' unloadable wherever no server is running,
+such as while byte-compiling it."
   :type `(set ,@(mapcar (lambda (type)
                           (list 'const type))
                         pdf-annot-annotation-types)))
@@ -360,27 +365,42 @@ Setting this after the package was loaded has no effect."
     (define-key kmap pdf-annot-minor-mode-map-prefix smap)
     (define-key smap "l" #'pdf-annot-list-annotations)
     (define-key smap "a" #'pdf-annot-attachment-dired)
-    (when (pdf-info-writable-annotations-p)
-      (define-key smap "D" #'pdf-annot-delete)
-      (define-key smap "t" #'pdf-annot-add-text-annotation)
-      (when (pdf-info-markup-annotations-p)
-        (define-key smap "m" #'pdf-annot-add-markup-annotation)
-        (define-key smap "s" #'pdf-annot-add-squiggly-markup-annotation)
-        (define-key smap "u" #'pdf-annot-add-underline-markup-annotation)
-        (define-key smap "o" #'pdf-annot-add-strikeout-markup-annotation)
-        (define-key smap "h" #'pdf-annot-add-highlight-markup-annotation)
-        (when (pdf-info-shape-annotations-p)
-          (define-key smap "r" #'pdf-annot-add-square-annotation)
-          (define-key smap "c" #'pdf-annot-add-circle-annotation)
-          (define-key smap "L" #'pdf-annot-add-line-annotation))
-        (when (pdf-info-stamp-annotations-p)
-          (define-key smap "S" #'pdf-annot-add-stamp-annotation))
-        (when (pdf-info-free-text-annotations-p)
-          (define-key smap "f" #'pdf-annot-add-free-text-annotation))
-        (when (pdf-info-ink-annotations-p)
-          (define-key smap "i" #'pdf-annot-add-ink-annotation))))
     kmap)
-  "Keymap used for `pdf-annot-minor-mode'.")
+  "Keymap used for `pdf-annot-minor-mode'.
+
+It holds the commands that work without the epdfinfo server; the
+ones that need it are bound by `pdf-annot--bind-server-keys' when
+the mode is turned on, see there.")
+
+(defun pdf-annot--bind-server-keys ()
+  "Bind in `pdf-annot-minor-mode-map' what the server can do.
+The map is made when this library is loaded, and there need not be
+a server to ask about its features then -- while byte-compiling,
+for instance, or in a session that has not opened a PDF yet -- so
+the keys that depend on them are bound when the mode is turned on
+in a PDF buffer, where asking is cheap and meaningful."
+  (let ((smap (lookup-key pdf-annot-minor-mode-map
+                          pdf-annot-minor-mode-map-prefix)))
+    (when (keymapp smap)
+      (when (pdf-info-writable-annotations-p)
+        (define-key smap "D" #'pdf-annot-delete)
+        (define-key smap "t" #'pdf-annot-add-text-annotation)
+        (when (pdf-info-markup-annotations-p)
+          (define-key smap "m" #'pdf-annot-add-markup-annotation)
+          (define-key smap "s" #'pdf-annot-add-squiggly-markup-annotation)
+          (define-key smap "u" #'pdf-annot-add-underline-markup-annotation)
+          (define-key smap "o" #'pdf-annot-add-strikeout-markup-annotation)
+          (define-key smap "h" #'pdf-annot-add-highlight-markup-annotation)
+          (when (pdf-info-shape-annotations-p)
+            (define-key smap "r" #'pdf-annot-add-square-annotation)
+            (define-key smap "c" #'pdf-annot-add-circle-annotation)
+            (define-key smap "L" #'pdf-annot-add-line-annotation))
+          (when (pdf-info-stamp-annotations-p)
+            (define-key smap "S" #'pdf-annot-add-stamp-annotation))
+          (when (pdf-info-free-text-annotations-p)
+            (define-key smap "f" #'pdf-annot-add-free-text-annotation))
+          (when (pdf-info-ink-annotations-p)
+            (define-key smap "i" #'pdf-annot-add-ink-annotation)))))))
 
 (defvar savehist-minibuffer-history-variables)
 
@@ -392,6 +412,7 @@ Setting this after the package was loaded has no effect."
   :group 'pdf-annot
   (cond
    (pdf-annot-minor-mode
+    (pdf-annot--bind-server-keys)
     (when pdf-annot-tweak-tooltips
       (when (boundp 'x-gtk-use-system-tooltips)
         (setq x-gtk-use-system-tooltips nil))
@@ -1219,12 +1240,18 @@ Return the new annotation."
           (pcase type
             ;; The start and end point of the line.
             ('line edges)
-            ;; Draft can not be set later, so pass the icon along.
+            ;; Draft can not be set later, so pass the icon along;
+            ;; the same goes for the image of an image stamp.
             ('stamp
-             (let ((icon (cdr (assq 'icon property-alist))))
-               (setq property-alist (assq-delete-all
-                                     'icon (copy-sequence property-alist)))
-               (and icon (list icon))))
+             (let* ((alist (copy-sequence property-alist))
+                    (icon (cdr (assq 'icon alist)))
+                    (image (cdr (assq 'image alist))))
+               (setq property-alist
+                     (assq-delete-all 'icon (assq-delete-all 'image alist)))
+               (and (or icon image)
+                    (list (if image
+                              (concat "image:" (expand-file-name image))
+                            icon)))))
             ;; The strokes, preceded by their width, which can not
             ;; be changed later.
             ('ink
@@ -1564,6 +1591,95 @@ Return the new annotation."
    (pdf-annot--shape-properties
     'stamp (and icon `((icon . ,icon))) property-alist)
    (car region)))
+
+(defun pdf-annot-png-size (file)
+  "Return the size of the PNG image in FILE, as a cons (WIDTH . HEIGHT).
+
+The values are in pixels.  Signal an error, if FILE is not a PNG
+image.  Only the header of FILE is read."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally file)
+    (when (or (< (point-max) 24)
+              (not (equal (buffer-substring 1 9)
+                          (unibyte-string ?\211 ?P ?N ?G 13 10 26 10)))
+              (not (equal (buffer-substring 13 17) "IHDR")))
+      (error "Not a PNG image: %s" file))
+    (let ((decode
+           (lambda (from)
+             (+ (* (char-after from) 16777216)
+                (* (char-after (+ from 1)) 65536)
+                (* (char-after (+ from 2)) 256)
+                (char-after (+ from 3))))))
+      (cons (funcall decode 17) (funcall decode 21)))))
+
+(defun pdf-annot--fit-edges (edges aspect)
+  "Return EDGES shrunk to ASPECT, the ratio of width to height.
+
+The result has the same center and, unless it is empty, one of its
+width and height is that of EDGES; the other one is smaller, so
+that the ratio of the result is ASPECT."
+  (when (and aspect (> aspect 0))
+    (pdf-util-with-edges (edges)
+      (cond
+       ((or (<= edges-width 0) (<= edges-height 0))
+        ;; An empty region: give it the shape of ASPECT.
+        (list edges-left edges-top
+              (+ edges-left 0.1) (+ edges-top (/ 0.1 aspect))))
+       ((> (/ edges-width edges-height) aspect)
+        (let ((new-width (* edges-height aspect)))
+          (list (+ edges-left (/ (- edges-width new-width) 2))
+                edges-top
+                (+ edges-left (/ (+ edges-width new-width) 2))
+                edges-bot)))
+       (t
+        (let ((new-height (/ edges-width aspect)))
+          (list edges-left
+                (+ edges-top (/ (- edges-height new-height) 2))
+                edges-right
+                (+ edges-top (/ (+ edges-height new-height) 2)))))))))
+
+(defun pdf-annot-add-image-stamp-annotation (region &optional image
+                                                    property-alist)
+  "Add a new stamp annotation showing IMAGE in the selected window.
+
+REGION determines the area the stamp fills; see
+`pdf-annot-add-shape-annotation'.  The image keeps its aspect
+ratio: it is centered in the bounding box of REGION, shrunk to
+the smaller of the width and height of that box.  IMAGE is the
+name of a PNG file; it becomes part of the PDF and can not be
+changed afterwards, only by deleting the annotation.
+Interactively, read IMAGE in the minibuffer.
+
+The stamp can be moved while its document is open.  Once it has
+been saved and the document reopened, moving it again drops the
+image; delete the annotation and place it anew instead.
+
+PROPERTY-ALIST is as in `pdf-annot-add-annotation'; it can not
+change the appearance of the image.
+
+See also `pdf-annot-add-annotation'.
+
+Return the new annotation."
+  (interactive
+   (list (pdf-view-active-region t)
+         (read-file-name "Image file (PNG): ")))
+  (unless (pdf-info-image-stamps-p)
+    (error "Creating image stamps is not supported by this version of \
+epdfinfo (requires poppler-glib >= 22.07 and PNG support in cairo)"))
+  (unless image
+    (error "No image given"))
+  (let* ((image (expand-file-name image))
+         (size (pdf-annot-png-size image))
+         (aspect (/ (car size) (float (cdr size))))
+         (edges (pdf-annot--fit-edges
+                 (pdf-annot--region-rectangle region) aspect)))
+    (pdf-annot-add-annotation
+     'stamp
+     edges
+     (cons (cons 'image image)
+           (pdf-annot--shape-properties 'stamp property-alist))
+     (car region))))
 
 (defun pdf-annot--assert-creatable (type)
   "Signal an error, if epdfinfo can not create annotations of TYPE."
@@ -2237,12 +2353,31 @@ belong to the same page and A1 is displayed above/left of A2."
                      (and (= e1-top e2-top)
                           (<= e1-left e2-left)))))))))
 
+(defconst pdf-annot--markup-dependent-types
+  '(squiggly highlight underline strike-out square circle line
+    stamp free-text ink)
+  "Annotation types the server needs markup support for.")
+
+(defun pdf-annot--listed-types ()
+  "Return the annotation types the list buffer should show.
+
+This is `pdf-annot-list-listed-types', less the types the server
+cannot handle: poppler without markup annotations can neither
+create nor edit them, so listing them would only offer editing
+that fails.  The rest of the list is left alone, so customizing it
+still works with an old server."
+  (if (pdf-info-markup-annotations-p)
+      pdf-annot-list-listed-types
+    (seq-remove (lambda (type)
+                  (memq type pdf-annot--markup-dependent-types))
+                pdf-annot-list-listed-types)))
+
 (defun pdf-annot-list-entries ()
   "Return all the annotations of this PDF buffer as a `tabulated-list'."
   (unless (buffer-live-p pdf-annot-list-document-buffer)
     (error "No PDF document associated with this buffer"))
   (mapcar #'pdf-annot-list-create-entry
-          (sort (pdf-annot-getannots nil pdf-annot-list-listed-types
+          (sort (pdf-annot-getannots nil (pdf-annot--listed-types)
                                      pdf-annot-list-document-buffer)
                 #'pdf-annot-compare-annotations)))
 
