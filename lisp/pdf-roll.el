@@ -24,6 +24,8 @@
 ;;; Code:
 (require 'pdf-view)
 
+(declare-function image-size "image.c")
+
 (put 'pdf-roll 'display '(space :width 25 :height 1000))
 (put 'pdf-roll 'evaporate t)
 (put 'pdf-roll-margin 'evaporate t)
@@ -109,7 +111,7 @@ before it made."
 (defun pdf-roll-maybe-slice-image (image &optional window inhibit-slice-p)
   "Return a sliced IMAGE if `pdf-view-current-slice' in WINDOW is non-nil.
 If INHIBIT-SLICE-P is non-nil, disregard `pdf-view-current-slice'."
-  (if-let ((slice (pdf-view-current-slice window))
+  (if-let* ((slice (pdf-view-current-slice window))
            ((not inhibit-slice-p)))
       (list (cons 'slice
                   (pdf-util-scale slice (image-size image t) 'round))
@@ -223,7 +225,7 @@ overlays."
           (when prototype
             (overlay-put (copy-overlay prototype) 'window win))))
       (dolist (win-st pdf-roll--state)
-        (when-let ((win-old (car-safe win-st))
+        (when-let* ((win-old (car-safe win-st))
                    ((not (window-live-p win-old))))
           (remove-overlays (point-min) (point-max) 'window win-old)))
       (cl-callf2 cl-delete-if-not #'window-live-p pdf-roll--state :key #'car-safe)))

@@ -30,6 +30,7 @@
 ;; Silence native-comp warnings about functions defined elsewhere
 (declare-function pdf-view-desired-image-size "pdf-view")
 (declare-function pdf-view-create-page "pdf-view")
+(declare-function image-size "image.c")
 (declare-function image-mode-window-get "image-mode")
 
 
