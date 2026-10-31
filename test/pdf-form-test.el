@@ -826,3 +826,194 @@ The database has the password PASSWORD, if it is non-nil."
         (pdf-undo)
         (should (cl-some (lambda (a) (eq (alist-get 'type a) 'stamp))
                          (pdf-info-getannots nil)))))))
+
+;; The certificate store.  These tests do not need poppler: the
+;; management commands run certutil and pk12util on their own, and
+;; the pure ones build argument lists without running anything.
+
+(defun pdf-form-test-iso-time (days)
+  "Return an ISO 8601 string DAYS days from now, in UTC."
+  (format-time-string "%Y-%m-%dT%H:%M:%SZ"
+                      (time-add (current-time) (* days 24 60 60))
+                      t))
+
+(ert-deftest pdf-form-certificate-string-expiry ()
+  "Say in `pdf-form--certificate-to-string' when a certificate has expired."
+  (let ((expired (pdf-form--certificate-to-string
+                  `((id . "old") (subject . "Old Signer")
+                    (expires . ,(pdf-form-test-iso-time -1)))))
+        (soon (pdf-form--certificate-to-string
+               `((id . "soon") (subject . "Soon Signer")
+                 (expires . ,(pdf-form-test-iso-time 10)))))
+        (valid (pdf-form--certificate-to-string
+                `((id . "new") (subject . "New Signer")
+                  (expires . ,(pdf-form-test-iso-time 200))))))
+    (should (string-match-p ", expired)\\'" expired))
+    (should (string-match-p ", expires [0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\})"
+                            soon))
+    (should-not (string-match-p ", expired" soon))
+    (should (string-match-p "expires [0-9]\\{4\\}-" valid))
+    (should-not (string-match-p ", expired" valid))))
+
+(ert-deftest pdf-form-certificate-state ()
+  "Describe the three states of a certificate's expiry."
+  (let ((now (current-time))
+        (certificate (lambda (days)
+                       `((id . "nick")
+                         (expires . ,(pdf-form-test-iso-time days))))))
+    (should (equal (pdf-form--certificate-state (funcall certificate -1) now)
+                   "expired"))
+    (should (equal (pdf-form--certificate-state (funcall certificate 0.5) now)
+                   "expires today"))
+    (should (equal (pdf-form--certificate-state (funcall certificate 10.5) now)
+                   "expires in 10 days"))
+    (should (equal (pdf-form--certificate-state (funcall certificate 200) now)
+                   "valid"))
+    ;; The warning threshold is a customization.
+    (let ((pdf-form-certificate-warning-days 5))
+      (should (equal (pdf-form--certificate-state (funcall certificate 10.5)
+                                                  now)
+                     "valid")))))
+
+(ert-deftest pdf-form-certificate-command ()
+  "Build the certutil and pk12util argument lists without running them."
+  (let ((pdf-info-nss-directory nil))
+    (should (equal (pdf-form--certificate-command 'list)
+                   (list "certutil" "-L" "-d"
+                         (concat "sql:"
+                                 (expand-file-name "~/.pki/nssdb"))))))
+  (let ((pdf-info-nss-directory "/tmp/example-nss"))
+    (let ((list-command
+           (pdf-form--certificate-command 'list :password-file "/tmp/pw")))
+      (should (equal (car list-command) "certutil"))
+      (should (member "-L" list-command))
+      (should (equal (cadr (member "-d" list-command)) "sql:/tmp/example-nss"))
+      (should (equal (cadr (member "-f" list-command)) "/tmp/pw")))
+    (let ((create (pdf-form--certificate-command
+                   'create :nickname "nick" :subject "CN=Tim,O=Clemson"
+                   :days 365 :password-file "/tmp/pw" :noise-file "/tmp/noise")))
+      (should (equal (car create) "certutil"))
+      (should (member "-S" create))
+      (should (member "-x" create))
+      (should (equal (cadr (member "-n" create)) "nick"))
+      (should (equal (cadr (member "-s" create)) "CN=Tim,O=Clemson"))
+      (should (equal (cadr (member "-t" create)) "u,u,u"))
+      (should (equal (cadr (member "-d" create)) "sql:/tmp/example-nss"))
+      (should (equal (cadr (member "-f" create)) "/tmp/pw"))
+      (should (equal (cadr (member "-z" create)) "/tmp/noise"))
+      (should (member "--keyUsage" create))
+      ;; certutil counts months, not days.
+      (should (equal (cadr (member "-v" create)) "12")))
+    (let ((delete (pdf-form--certificate-command
+                   'delete :nickname "nick" :password-file "/tmp/pw")))
+      (should (equal (car delete) "certutil"))
+      (should (member "-D" delete))
+      (should (equal (cadr (member "-n" delete)) "nick"))
+      (should (equal (cadr (member "-d" delete)) "sql:/tmp/example-nss"))
+      (should (equal (cadr (member "-f" delete)) "/tmp/pw")))
+    (let ((import (pdf-form--certificate-command
+                   'import :file "/tmp/cert.p12"
+                   :file-password-file "/tmp/file-pw"
+                   :password-file "/tmp/pw")))
+      (should (equal (car import) "pk12util"))
+      (should (equal (cadr (member "-i" import)) "/tmp/cert.p12"))
+      (should (equal (cadr (member "-d" import)) "sql:/tmp/example-nss"))
+      (should (equal (cadr (member "-w" import)) "/tmp/file-pw"))
+      (should (equal (cadr (member "-k" import)) "/tmp/pw")))))
+
+(ert-deftest pdf-form-certificates-list ()
+  "List certificates with expiry, expired ones first and red."
+  (let ((certificates
+         (list `((id . "new") (subject . "New Signer")
+                 (issuer . "New Signer")
+                 (expires . ,(pdf-form-test-iso-time 200)))
+               `((id . "old") (subject . "Old Signer")
+                 (issuer . "Old Signer")
+                 (expires . ,(pdf-form-test-iso-time -1)))
+               `((id . "soon") (subject . "Soon Signer")
+                 (issuer . "Someone Else")
+                 (expires . ,(pdf-form-test-iso-time 5.5))))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'pdf-info-signingcertificates)
+                   (lambda (&optional _password) certificates)))
+          (let ((buffer (pdf-form-certificates nil)))
+            (with-current-buffer buffer
+              (should (derived-mode-p 'pdf-form-certificates-mode))
+              ;; Expired first, then by expiry.
+              (should (equal (mapcar #'car tabulated-list-entries)
+                             '("old" "soon" "new")))
+              ;; Point starts on the expired one.
+              (should (looking-at-p " *Old Signer"))
+              ;; It is red, and its state says so.
+              (search-forward "Old Signer")
+              (should (eq (get-text-property (match-beginning 0) 'face)
+                          'error))
+              (search-forward "expired")
+              (should (eq (get-text-property (match-beginning 0) 'face)
+                          'error))
+              ;; The soon-expiring one is not red, but visible.
+              (search-forward "expires in 5 days")
+              (should (eq (get-text-property (match-beginning 0) 'face)
+                          'warning))
+              ;; The Issuer column is there because one differs, but
+              ;; a self-signed certificate leaves its cell empty.
+              (should (member "Issuer"
+                              (mapcar #'car tabulated-list-format)))
+              (should (string-match-p "Soon Signer +Someone Else"
+                                      (buffer-substring-no-properties
+                                       (point-min) (point-max))))))
+      (when (get-buffer "*PDF Certificates*")
+        (kill-buffer "*PDF Certificates*"))))))
+
+(ert-deftest pdf-form-read-certificate-default ()
+  "Offer the default certificate first and as the default answer."
+  (let ((certificates
+         '(((id . "a") (subject . "A") (expires . "2030-01-01T00:00:00Z"))
+           ((id . "b") (subject . "B") (expires . "2031-01-01T00:00:00Z"))))
+        (pdf-form-default-certificate "b")
+        (prompt nil))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (p _collection &optional _predicate _require _initial
+                          _history default _inherit)
+                 (setq prompt p)
+                 default)))
+      (let-alist (pdf-form-read-certificate certificates)
+        (should (equal .id "b")))
+      (should (string-match-p "default B (" prompt)))))
+
+(ert-deftest pdf-form-certificate-create-and-list ()
+  "Create a self-signed certificate and list it with certutil.
+
+The database is made with `certutil -N --empty-password', which
+this NSS version accepts.  If a version wanted a password, the
+test makes the database with one through a 0600 password file
+instead, and answers `read-passwd' with that password."
+  (skip-unless (executable-find "certutil"))
+  (let* ((dir (make-temp-file "pdf-form-nss-test" t))
+         (db (concat "sql:" dir))
+         (pdf-info-nss-directory dir)
+         (pdf-form-default-certificate nil)
+         (password nil)
+         (password-file (expand-file-name "password" dir)))
+    (unwind-protect
+        (progn
+          (unless (eq 0 (call-process "certutil" nil nil nil
+                                      "-N" "-d" db "--empty-password"))
+            (setq password "secret")
+            (write-region "secret\n" nil password-file nil 'silent)
+            (set-file-modes password-file #o600)
+            (should (eq 0 (call-process "certutil" nil nil nil
+                                        "-N" "-f" password-file "-d" db))))
+          (cl-letf (((symbol-function 'read-passwd)
+                     (lambda (&rest _) password)))
+            (pdf-form-certificate-create "test signer" "Test Signer"
+                                         "pdf-tools" "test@example.com" 30))
+          ;; certutil lists the new certificate; this test does not
+          ;; involve poppler, which may refuse an unfinished store.
+          (let ((listing (with-temp-buffer
+                           (call-process "certutil" nil t nil "-L" "-d" db)
+                           (buffer-string))))
+            (should (string-match-p "test signer" listing))
+            (should (equal (pdf-form--certificate-nicknames listing)
+                           '("test signer")))))
+      (delete-directory dir t))))
