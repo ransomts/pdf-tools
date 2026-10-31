@@ -967,6 +967,17 @@ t or nil signals an error."
           ;; The new annotation is on page 1 and therefore listed first.
           (should (eq (car (listed)) (pdf-annot-get-id a))))))))
 
+(ert-deftest pdf-annot-test-listed-types-without-markup ()
+  "Markup types are left out where the server has no support for them."
+  (cl-letf (((symbol-function 'pdf-info-markup-annotations-p) #'ignore))
+    ;; The default lists the markup types; it is filtered, not
+    ;; computed, when the list is filled.
+    (should (equal (pdf-annot--listed-types) '(text file)))
+    (let ((pdf-annot-list-listed-types '(text file highlight squiggly)))
+      (should (equal (pdf-annot--listed-types) '(text file)))))
+  (let ((pdf-annot-list-listed-types '(text file highlight)))
+    (should (equal (pdf-annot--listed-types) '(text file highlight)))))
+
 (ert-deftest pdf-annot-test-list-entries ()
   "Entries honour `pdf-annot-list-listed-types' and come sorted."
   (pdf-annot-test-with-pdf "test.pdf"
@@ -1351,6 +1362,9 @@ t or nil signals an error."
                      '(1 (0.1 0.1 0.2 0.2)))))))
 
 (ert-deftest pdf-annot-keys-free-text-ink ()
+  ;; The keys are bound when the mode is on; bind them here, as the
+  ;; test can run before any PDF buffer was shown.
+  (pdf-annot--bind-server-keys)
   (should (eq (and (pdf-info-free-text-annotations-p)
                    'pdf-annot-add-free-text-annotation)
               (lookup-key pdf-annot-minor-mode-map (kbd "C-c C-a f"))))
