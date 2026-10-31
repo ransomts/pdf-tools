@@ -365,6 +365,14 @@ Setting this after the package was loaded has no effect."
     (define-key kmap pdf-annot-minor-mode-map-prefix smap)
     (define-key smap "l" #'pdf-annot-list-annotations)
     (define-key smap "a" #'pdf-annot-attachment-dired)
+    ;; Document-level attachments.  These commands live in pdf-misc,
+    ;; like the metadata commands, and sit next to the annotation-level
+    ;; attachments above.  They do not depend on what the server can
+    ;; do, so they are bound here rather than in
+    ;; `pdf-annot--bind-server-keys'.
+    (define-key smap "A" #'pdf-misc-attachments-dired)
+    (define-key smap "+" #'pdf-misc-add-attachment)
+    (define-key smap "-" #'pdf-misc-remove-attachment)
     kmap)
   "Keymap used for `pdf-annot-minor-mode'.
 
