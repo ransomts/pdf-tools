@@ -1713,6 +1713,25 @@ annotation_markup_append_text_region (PopplerPage *page,
 
 #endif
 
+#ifdef HAVE_POPPLER_ANNOT_MARKUP
+/**
+ * Parse a decimal number, as sent by the Lisp side.
+ *
+ * @param text The number as a string.
+ * @param value[out] The parsed number.
+ *
+ * @return TRUE, if text is exactly one number.
+ */
+static gboolean
+annotation_parse_double (const char *text, double *value)
+{
+  gchar *end = NULL;
+
+  *value = g_ascii_strtod (text, &end);
+  return end != text && *end == '\0';
+}
+#endif
+
 #ifdef HAVE_POPPLER_ANNOT_SHAPES
 /* Margin around a line annotation's end points, in PDF points. */
 #define LINE_ANNOT_MARGIN 4.0
@@ -2270,6 +2289,19 @@ annotation_edit_validate (const epdfinfo_t *ctx, const command_arg_t *rest,
 #endif
           atype = ARG_EDGES_OR_POSITION;
         }
+#ifdef HAVE_POPPLER_ANNOT_MARKUP
+      else if (! strcmp (key, "markup-edges"))
+        {
+          /* The quadrilaterals of a text markup annotation are stored
+             separately from its rectangle: setting `edges' moves the
+             rectangle but leaves the quads (and thus everything that is
+             rendered) where they were.  Moving such an annotation means
+             moving its quads, which is what this property does. */
+          cerror_if_not (POPPLER_IS_ANNOT_TEXT_MARKUP (annotation),
+                         error_msg, error_fmt, key, "text markup");
+          atype = ARG_STRING;
+        }
+#endif
       else if (! strcmp (key, "label"))
         {
           cerror_if_not (annotation_is_markup (annotation), error_msg,
@@ -4896,6 +4928,75 @@ cmd_editannot (const epdfinfo_t *ctx, const command_arg_t *args)
             }
 #endif
         }
+#ifdef HAVE_POPPLER_ANNOT_MARKUP
+      else if (! strcmp (key, "markup-edges"))
+        {
+          GArray *quads = NULL;
+          gchar **nums = NULL;
+          guint j, n, k;
+          double left, top, right, bot, width, height;
+          PopplerRectangle *area = &a->amap->area;
+
+          perror_if_not (command_arg_parse_arg  (ctx, rest_args[i], &carg,
+                                                 ARG_STRING, NULL),
+                         unexpected_parse_error, rest_args[i]);
+          nums = g_strsplit_set (carg.value.string, " \t\n", -1);
+          /* Compact the tokens in place: the value may have leading or
+             doubled separators. */
+          for (j = k = 0; nums[j]; ++j)
+            if (*nums[j])
+              nums[k++] = nums[j];
+            else
+              g_free (nums[j]);
+          nums[k] = NULL;
+          n = k;
+          /* The value is a flat list of numbers, four per rectangle. */
+          perror_if_not (n > 0 && n % 4 == 0,
+                         "Expected four numbers per markup rectangle, got %u",
+                         n);
+          for (j = 0; j < n; ++j)
+            perror_if_not (annotation_parse_double (nums[j], &left),
+                           unexpected_parse_error, rest_args[i]);
+
+          poppler_page_get_size (page, &width, &height);
+          quads = g_array_sized_new (FALSE, FALSE, sizeof (PopplerQuadrilateral),
+                                     n / 4);
+          area->x1 = area->y1 = G_MAXDOUBLE;
+          area->x2 = area->y2 = -G_MAXDOUBLE;
+          for (j = 0; j < n; j += 4)
+            {
+              PopplerQuadrilateral q;
+
+              annotation_parse_double (nums[j], &left);
+              annotation_parse_double (nums[j + 1], &top);
+              annotation_parse_double (nums[j + 2], &right);
+              annotation_parse_double (nums[j + 3], &bot);
+
+              /* Quads are in PDF coordinates, i.e. the origin is in the
+                 bottom left corner. */
+              q.p1.x = left * width;
+              q.p1.y = height - top * height;
+              q.p2.x = right * width;
+              q.p2.y = q.p1.y;
+              q.p4.x = right * width;
+              q.p4.y = height - bot * height;
+              q.p3.x = left * width;
+              q.p3.y = q.p4.y;
+              g_array_append_val (quads, q);
+              area->x1 = MIN (area->x1, q.p1.x);
+              area->y1 = MIN (area->y1, q.p4.y);
+              area->x2 = MAX (area->x2, q.p2.x);
+              area->y2 = MAX (area->y2, q.p1.y);
+            }
+          poppler_annot_text_markup_set_quadrilaterals
+            (POPPLER_ANNOT_TEXT_MARKUP (pa), quads);
+          /* Keep the annotation's rectangle in sync, so that `edges'
+             agrees with the quads for everyone who reads it. */
+          poppler_annot_set_rectangle (pa, area);
+          g_array_unref (quads);
+          g_strfreev (nums);
+        }
+#endif
       else if (! strcmp (key, "label"))
         {
           PopplerAnnotMarkup *ma = POPPLER_ANNOT_MARKUP (pa);

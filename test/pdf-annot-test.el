@@ -138,6 +138,44 @@ the tests are about the list."
   "Return non-nil if numbers A and B differ by less than 1e-3."
   (< (abs (- a b)) 1e-3))
 
+(defun pdf-annot-test-rect= (expected actual)
+  "Return non-nil if rectangles EXPECTED and ACTUAL are near equal."
+  (and (= (length expected) (length actual))
+       (cl-every #'pdf-annot-test-approx= expected actual)))
+
+(defun pdf-annot-test-adjust (a keys &optional prefix)
+  "Adjust A reading KEYS, with PREFIX as the prefix argument.
+
+Only the answer of `read-key-sequence' is faked.  Return the
+number of redisplays."
+  (let ((n 0)
+        (current-prefix-arg prefix)
+        (keys (copy-sequence keys)))
+    (cl-letf (((symbol-function 'read-key-sequence)
+               (lambda (&rest _) (pop keys)))
+              ;; Batch Emacs has no window to take the image size from.
+              ((symbol-function 'pdf-util-assert-pdf-window)
+               #'ignore)
+              ((symbol-function 'pdf-view-image-size)
+               (lambda (&rest _) '(100 . 100)))
+              ((symbol-function 'pdf-view-redisplay)
+               (lambda (&rest _) (cl-incf n))))
+      (pdf-annot-adjust a))
+    n))
+
+(defun pdf-annot-test-refresh (a)
+  "Return the current `edges' of annotation A, as the server has them."
+  (pdf-annot-get (pdf-annot-getannot (pdf-annot-get-id a)) 'edges))
+
+(defun pdf-annot-test-edges= (expected actual)
+  "Return non-nil if EXPECTED and ACTUAL are near equal.
+
+Either may be a single rectangle or a list of rectangles."
+  (if (numberp (car expected))
+      (pdf-annot-test-rect= expected actual)
+    (and (= (length expected) (length actual))
+         (cl-every #'pdf-annot-test-rect= expected actual))))
+
 
 ;; * ================================================================== *
 ;; * Accessors and predicates
@@ -1220,6 +1258,157 @@ t or nil signals an error."
                              nil '(square circle line stamp))))
           (should (stringp (pdf-annot-print-property square
                                                      'interior-color))))))))
+
+;; ** Moving and resizing
+
+(ert-deftest pdf-annot-move-edges ()
+  (should (pdf-annot-test-edges= '((0.2 0.2 0.4 0.4))
+                                 (pdf-annot--move-edges
+                                  '((0.1 0.1 0.3 0.3)) 0.1 0.1)))
+  ;; Annotations do not leave the page.
+  (should (pdf-annot-test-edges= '((0.8 0.8 1.0 1.0))
+                                 (pdf-annot--move-edges
+                                  '((0.6 0.6 0.8 0.8)) 0.5 0.5)))
+  (should (pdf-annot-test-edges= '((0.0 0.0 0.2 0.2))
+                                 (pdf-annot--move-edges
+                                  '((0.1 0.1 0.3 0.3)) -0.5 -0.5)))
+  ;; A group of text regions keeps its shape: it is moved as a whole.
+  (should (pdf-annot-test-edges= '((0.5 0.1 0.7 0.2) (0.5 0.3 0.7 0.4))
+                                 (pdf-annot--move-edges
+                                  '((0.1 0.1 0.3 0.2) (0.1 0.3 0.3 0.4))
+                                  0.4 0.0)))
+  ;; The group as a whole stops at the page edge.
+  (should (pdf-annot-test-edges= '((0.6 0.1 0.8 0.2) (0.6 0.3 0.8 0.4))
+                                 (pdf-annot--move-edges
+                                  '((0.1 0.1 0.3 0.2) (0.1 0.3 0.3 0.4))
+                                  0.5 0.0))))
+
+(ert-deftest pdf-annot-resize-edges ()
+  (let ((min pdf-annot-resize-min-size))
+    (should (pdf-annot-test-edges= '(0.1 0.1 0.5 0.5)
+                                   (pdf-annot--resize-edges
+                                    '(0.1 0.1 0.4 0.4) 'right-bot 0.1 0.1)))
+    (should (pdf-annot-test-edges= '(0.2 0.2 0.4 0.4)
+                                   (pdf-annot--resize-edges
+                                    '(0.1 0.1 0.4 0.4) 'left-top 0.1 0.1)))
+    (should (pdf-annot-test-edges= '(0.1 0.1 0.4 0.5)
+                                   (pdf-annot--resize-edges
+                                    '(0.1 0.1 0.4 0.4) 'left-bot 0.0 0.1)))
+    ;; A corner can not cross the one opposite to it.
+    (should (pdf-annot-test-edges=
+             (list 0.1 0.1 (+ 0.1 min) (+ 0.1 min))
+             (pdf-annot--resize-edges '(0.1 0.1 0.4 0.4)
+                                      'right-bot -1.0 -1.0)))
+    ;; Nor can the rectangle leave the page.
+    (should (pdf-annot-test-edges= '(0.0 0.0 0.4 0.4)
+                                   (pdf-annot--resize-edges
+                                    '(0.1 0.1 0.4 0.4) 'left-top -1.0 -1.0)))
+    (should-error (pdf-annot--resize-edges '(0.1 0.1 0.4 0.4)
+                                           'middle 0.1 0.1))))
+
+(ert-deftest pdf-annot-move-annotation ()
+  (pdf-annot-test-with-temp-copy file
+    (pdf-annot-test-with-pdf file
+      (let ((square (pdf-annot-add-annotation
+                     'square '(0.1 0.1 0.3 0.3) nil 1)))
+        (should (buffer-modified-p))
+        ;; 10 pixels of a 100x100 image is a tenth of the page.
+        (pdf-annot-move square 10 10 '(100 . 100))
+        (should (pdf-annot-test-edges= '(0.2 0.2 0.4 0.4)
+                                       (pdf-annot-test-refresh square)))
+        ;; Moving beyond the edge stops there instead of leaving the page.
+        (pdf-annot-move square 10000 0 '(100 . 100))
+        (should (pdf-annot-test-edges= '(0.8 0.2 1.0 0.4)
+                                       (pdf-annot-test-refresh square)))))))
+
+(ert-deftest pdf-annot-move-markup-annotation ()
+  (skip-unless (pdf-info-markup-annotations-p))
+  (pdf-annot-test-with-temp-copy file
+    (pdf-annot-test-with-pdf file
+      (let* ((a (pdf-annot-test-highlight-annot))
+             (before (pdf-annot-get a 'markup-edges)))
+        (pdf-annot-move a 10 0 '(100 . 100))
+        (let* ((a (pdf-annot-getannot (pdf-annot-get-id a)))
+               (after (pdf-annot-get a 'markup-edges)))
+          ;; Every text region moved, none was resized.
+          (should (= (length before) (length after)))
+          (cl-loop for b in before
+                   for c in after
+                   do (progn
+                        (should (pdf-annot-test-approx=
+                                 (nth 0 c) (+ (nth 0 b) 0.1)))
+                        (should (pdf-annot-test-approx=
+                                 (nth 2 c) (+ (nth 2 b) 0.1)))
+                        (should (pdf-annot-test-approx= (nth 1 c) (nth 1 b)))
+                        (should (pdf-annot-test-approx=
+                                 (nth 3 c) (nth 3 b))))))))))
+
+(ert-deftest pdf-annot-resize-annotation ()
+  (pdf-annot-test-with-temp-copy file
+    (pdf-annot-test-with-pdf file
+      (let ((square (pdf-annot-add-annotation
+                     'square '(0.1 0.1 0.3 0.3) nil 1)))
+        (pdf-annot-resize square 10 10 'right-bot '(100 . 100))
+        (should (pdf-annot-test-edges= '(0.1 0.1 0.4 0.4)
+                                       (pdf-annot-test-refresh square)))
+        ;; From the other corner.
+        (pdf-annot-resize square 10 10 'left-top '(100 . 100))
+        (should (pdf-annot-test-edges= '(0.2 0.2 0.4 0.4)
+                                       (pdf-annot-test-refresh square)))
+        ;; The bottom right corner is the default.
+        (pdf-annot-resize square 10 10 nil '(100 . 100))
+        (should (pdf-annot-test-edges= '(0.2 0.2 0.5 0.5)
+                                       (pdf-annot-test-refresh square)))))))
+
+(ert-deftest pdf-annot-adjust-with-the-keyboard ()
+  (pdf-annot-test-with-temp-copy file
+    (pdf-annot-test-with-pdf file
+      (let ((square (pdf-annot-add-annotation
+                     'square '(0.1 0.1 0.3 0.3) nil 1)))
+        ;; Two steps right, one step down, ended by another key.
+        (should (= 3 (pdf-annot-test-adjust
+                      square (list (kbd "<right>") (kbd "<right>")
+                                   (kbd "<down>") (kbd "x")))))
+        (should (pdf-annot-test-edges= '(0.12 0.11 0.32 0.31)
+                                       (pdf-annot-test-refresh square)))
+        ;; A mouse event is a vector, not a string, and ends it just as well.
+        (should (= 0 (pdf-annot-test-adjust square (list [mouse-1]))))
+        ;; A prefix argument is the step size for every key.
+        (should (= 1 (pdf-annot-test-adjust
+                      square (list (kbd "S-<right>") (kbd "x")) 10)))
+        (should (pdf-annot-test-edges= '(0.12 0.11 0.42 0.31)
+                                       (pdf-annot-test-refresh square)))))))
+
+(ert-deftest pdf-annot-resize-markup-annotation-is-an-error ()
+  (skip-unless (pdf-info-markup-annotations-p))
+  (pdf-annot-test-with-temp-copy file
+    (pdf-annot-test-with-pdf file
+      (should-error (pdf-annot-resize (pdf-annot-test-highlight-annot)
+                                      10 0 '(100 . 100))
+                    :type 'user-error))))
+
+(ert-deftest pdf-annot-move-line-annotation-is-an-error ()
+  (skip-unless (pdf-info-shape-annotations-p))
+  (pdf-annot-test-with-temp-copy file
+    (pdf-annot-test-with-pdf file
+      (let ((line (pdf-annot-add-annotation
+                   'line '(0.1 0.1 0.3 0.3) nil 1)))
+        (should-error (pdf-annot-move line 10 0 '(100 . 100))
+                      :type 'user-error)))))
+
+(ert-deftest pdf-annot-corner-at-position ()
+  (let ((square (pdf-annot-test-fake 'edges '(0.1 0.2 0.5 0.6))))
+    (should (eq 'left-top
+                (pdf-annot--corner-at-position square '(0 . 0) '(100 . 100))))
+    (should (eq 'right-bot
+                (pdf-annot--corner-at-position square '(100 . 100)
+                                               '(100 . 100))))
+    (should (eq 'right-top
+                (pdf-annot--corner-at-position square '(60 . 10)
+                                               '(100 . 100))))
+    (should (eq 'left-bot
+                (pdf-annot--corner-at-position square '(10 . 90)
+                                               '(100 . 100))))))
 
 (ert-deftest pdf-annot-add-image-stamp-annotation ()
   (skip-unless (pdf-info-image-stamps-p))

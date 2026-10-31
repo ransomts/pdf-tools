@@ -1782,6 +1782,12 @@ except \"Draft\", free text annotations `font-name',
 `is-open'.  Ink annotations keep their size, when their `edges'
 change.
 
+Text markup annotations (see `pdf-info-markup-annotations-p') keep
+their text regions, i.e. the quadrilaterals that are actually
+rendered, separate from `edges'.  Pass `markup-edges', a list of
+\(LEFT TOP RIGHT BOT\) rectangles, to replace them; `edges' alone
+does not move what is displayed.
+
 The server must support modifying annotations for this to work."
 
   (pdf-info-assert-writable-annotations)
@@ -1803,6 +1809,13 @@ The server must support modifying annotations for this to work."
               ((edges line popup)
                (list (car elt)
                      (mapconcat 'number-to-string (cdr elt) " ")))
+              (markup-edges
+               ;; A flat list of numbers, four per rectangle: the server
+               ;; has one string argument to work with.
+               (list (car elt)
+                     (mapconcat (lambda (edges)
+                                  (mapconcat 'number-to-string edges " "))
+                                (cdr elt) " ")))
               ((popup-is-open is-open)
                (list (car elt) (if (cdr elt) 1 0)))
               (t
