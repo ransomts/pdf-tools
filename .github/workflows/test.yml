@@ -47,7 +47,7 @@ jobs:
           - 'snapshot'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Emacs
         uses: purcell/setup-emacs@master
@@ -123,7 +123,7 @@ jobs:
       HOMEBREW_NO_INSTALL_CLEANUP: 1
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Emacs
         uses: purcell/setup-emacs@master
@@ -156,7 +156,7 @@ jobs:
         shell: msys2 {0}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup MSYS2
         uses: msys2/setup-msys2@v2
@@ -193,7 +193,7 @@ jobs:
           cp /ucrt64/bin/libssl*.dll pack/ || true
 
       - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: epdfinfo-ucrt64
           path: pack/
