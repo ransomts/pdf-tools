@@ -380,19 +380,8 @@ SPEC is a plist with :forward, :regexp, :case-fold and :word."
       (pdf-isearch-mode-cleanup))))
 
 (ert-deftest pdf-isearch-search-function-backward-below-visible-area ()
-  ;; BUG: When a backward search has had no match yet and moves to an
-  ;; earlier page, `pdf-isearch-next-match-isearch' looks for the
-  ;; closest match before the bottom of the *visible* part of that
-  ;; page.  `pdf-view-goto-page' shows a page from its top, so when
-  ;; the page is taller than the window (fit-width, zoomed in) every
-  ;; match below the visible part is skipped, although the page it just
-  ;; moved to has a match.  Forward search is unaffected, since it
-  ;; starts from the (visible) top.
-  ;; Repro: in a window showing only the top 100 of 792 pixels of a
-  ;; page, go to page 6 and C-r for "line": instead of stopping at
-  ;; "Outline" on page 5, the search skips it, skips "underline" on
-  ;; page 2 the same way, and fails with page 2 displayed.
-  :expected-result :failed
+  ;; A backward search that moves to an earlier page starts from the
+  ;; bottom of that page, not of the visible part of it.
   (pdf-isearch-test-with-isearch
     (pdf-view-goto-page 6)
     (pdf-isearch-mode-initialize)
