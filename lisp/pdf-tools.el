@@ -84,7 +84,7 @@
 ;;   vice-versa.
 ;;
 ;; * Misc
-;;    + Display PDF's metadata.
+;;    + Display and edit PDF's metadata.
 ;;    + Mark a region and kill the text from the PDF.
 ;;    + Search for occurrences of a string.
 ;;    + Keep track of visited pages via a history.

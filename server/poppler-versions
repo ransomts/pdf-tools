@@ -10,3 +10,6 @@ HAVE_POPPLER_ANNOT_SET_RECT
 
 HAVE_POPPLER_ANNOT_MARKUP
 0.26 poppler_annot_text_markup_new_{highlight,squiggly,strikeout,underline}
+
+HAVE_POPPLER_METADATA_WRITE
+0.46 poppler_document_set_{title,author,subject,keywords,creator}
