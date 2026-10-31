@@ -1128,7 +1128,7 @@ The signature is a stamp annotation showing IMAGE, a PNG file
 otherwise), that fills PLACE and keeps the aspect ratio of the
 image.  It is flattened into the page right away, so that the
 signed document looks the same in every PDF viewer; the previous
-version is kept for `pdf-pages-undo'.
+version is kept for `pdf-undo'.
 
 This is a signature in the everyday sense, a picture of your
 handwritten name, not a digital one: unlike `pdf-form-sign', it
@@ -1169,7 +1169,7 @@ epdfinfo (requires poppler-glib >= 22.07 and PNG support in cairo)"))
     (let (pdf-pages-confirm)
       (pdf-pages-flatten-annotations))
     (message "Signed `%s' with an image; the unsigned version is kept \
-for `pdf-pages-undo'"
+for `pdf-undo'"
              (file-name-nondirectory file))))
 
 (defun pdf-form--prepare-signing ()
