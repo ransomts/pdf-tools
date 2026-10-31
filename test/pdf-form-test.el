@@ -549,6 +549,18 @@ The database has the password PASSWORD, if it is non-nil."
       (let ((signed (pdf-form-test-field "approval-signed")))
         (should (equal (alist-get 'edges signed) (alist-get 'edges field)))
         (should (= 2 (length (pdf-form--signatures-at signed)))))
+      ;; The empty field is labelled as the field under the signature.
+      (let ((fields (pdf-form-fields '(1) #'pdf-form-signature-p)))
+        (should (equal (mapcar #'pdf-form--signature-heading fields)
+                       '("approval (page 1, empty, under approval-signed)\n"
+                         "approval-signed (page 1)\n")))
+        (pdf-form-describe-signatures fields)
+        (with-current-buffer "*PDF Signatures*"
+          (should (string-match-p
+                   (regexp-quote "approval (page 1, empty, under approval-signed)")
+                   (buffer-string)))
+          (should (string-match-p (regexp-quote "approval-signed (page 1)")
+                                  (buffer-string)))))
       (should-not (pdf-form-unsigned-fields)))))
 
 (ert-deftest pdf-form-sign-password ()
@@ -609,8 +621,11 @@ The database has the password PASSWORD, if it is non-nil."
     (with-current-buffer "*PDF Signatures*"
       (should (string-match-p "approval-signed (page 1)\n  Signature: +valid"
                               (buffer-string)))
-      (should (string-match-p "approval (page 1)\n  Signature: +unsigned"
-                              (buffer-string))))))
+      (should (string-match-p
+               (concat (regexp-quote
+                        "approval (page 1, empty, under approval-signed)")
+                       "\n  Signature: +unsigned")
+               (buffer-string))))))
 
 (defmacro pdf-form-test-with-image-signing (fixture &rest body)
   "Run BODY visiting a copy of FIXTURE, ready for image signing."
