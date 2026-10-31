@@ -700,6 +700,12 @@ Creator: LaTeX with hyperref package\n"))
                   (insert-file-contents extracted)
                   (should (equal (buffer-string) "# Rubric\n")))))))))))
 
+(defun pdf-misc-test--debug (label command)
+  "Print LABEL and the output of COMMAND as DEBUG log lines."
+  (message "DEBUG %s = %s" label
+           (replace-regexp-in-string
+            "\n" " | " (string-trim (shell-command-to-string command)))))
+
 (ert-deftest pdf-misc-add-attachment ()
   "The attachment is in the file and the rest of the document is unchanged."
   (skip-unless (executable-find "qpdf"))
@@ -711,6 +717,26 @@ Creator: LaTeX with hyperref package\n"))
            (npages (pdf-cache-number-of-pages))
            (text (pdf-info-gettext 1 '(0 0 1 1)))
            (metadata (pdf-info-metadata)))
+      (let* ((qpdf (pdf-pages--qpdf-program))
+             (dir (file-name-directory rubric)))
+        (pdf-misc-test--debug
+         "baseline"
+         (format "cp rubric.md %s/a.pdf; cd %s && for f in rubric.md a.pdf /etc/hostname /etc/os-release desc; do echo -n \"[$f] \"; %s --empty --add-attachment $f -- out.pdf 2>&1 | head -1; echo done; done"
+                 rubric dir qpdf))
+        (pdf-misc-test--debug
+         "audit"
+         "sudo -n dmesg 2>&1 | grep 'apparmor=\"DENIED\"' | tail -4 | cut -c1-320")
+        (pdf-misc-test--debug
+         "profiles"
+         "sudo -n aa-status 2>&1 | grep -icE 'profile'; sudo -n aa-status 2>&1 | grep -iE 'qpdf|pdf' | head -5; sudo -n cat /sys/kernel/security/apparmor/profiles 2>&1 | grep -iE 'qpdf|pdf' | head -5")
+        (pdf-misc-test--debug
+         "unconfined"
+         (format "cd %s && sudo -n aa-exec -p unconfined -- %s --empty --add-attachment rubric.md -- o2.pdf 2>&1 | head -1; echo unconfined-done; sudo -n %s --empty --add-attachment rubric.md -- o3.pdf 2>&1 | head -1; echo root-done"
+                 dir qpdf qpdf))
+        (pdf-misc-test--debug
+         "labels"
+         (format "cd %s && echo -n 'shell='; cat /proc/self/attr/current; echo -n 'qpdf= '; sudo -n aa-exec -p unconfined -- sh -c 'cat /proc/self/attr/current' 2>&1"
+                 dir)))
       (let ((attachments (pdf-misc-add-attachment rubric "The rubric")))
         (should (equal (pdf-misc-test-attachment-names attachments)
                        '("rubric.md")))
