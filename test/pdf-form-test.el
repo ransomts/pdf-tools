@@ -130,6 +130,63 @@
                    '("name" "notes" "secret" "agree" "color" "size"
                      "fruit" "pet" "tags" "zip" "Reset" "size")))))
 
+(defun pdf-form-test-widget-annots (page)
+  "Return the widget annotations of PAGE."
+  (cl-remove-if-not (lambda (a) (eq (pdf-annot-get a 'type) 'widget))
+                    (pdf-annot-getannots page)))
+
+(ert-deftest pdf-form-widget-annotation-is-a-field ()
+  "A widget annotation is the visible part of a form field.
+
+`pdf-annot' must leave its hotspot to `pdf-form', and activating
+the annotation must edit the field instead of its comment."
+  (pdf-test-with-pdf "forms.pdf"
+    (let ((annots (pdf-form-test-widget-annots 1)))
+      (should annots)
+      ;; Every widget annotation is drawn where its field is.
+      (dolist (a annots)
+        (should (pdf-form--field-at-edges (pdf-annot-get a 'page)
+                                          (pdf-annot-get a 'edges))))
+      ;; The annotation hotspots leave the widgets alone...
+      (let ((spots (pdf-annot-hotspot-function 1 '(1000 . 1000))))
+        (dolist (a annots)
+          (should-not (memq (pdf-annot-get-id a) (mapcar #'cadr spots)))))
+      ;; ...while every field you can use gets a hotspot of its own.
+      (let ((spots (mapcar #'cadr
+                           (pdf-form-hotspots-function 1 '(1000 . 1000)))))
+        (dolist (field (pdf-form--actionable-fields 1))
+          (should (memq (intern (format "form-field-%d"
+                                        (alist-get 'id field)))
+                        spots))))
+      ;; Activating a widget edits its field and handles the click.
+      (let* ((widget (cl-find-if
+                      (lambda (a)
+                        (equal "name"
+                               (alist-get 'name
+                                          (pdf-form--field-at-edges
+                                           (pdf-annot-get a 'page)
+                                           (pdf-annot-get a 'edges)))))
+                      annots))
+             edited)
+        (should widget)
+        (cl-letf (((symbol-function 'pdf-form-edit-field)
+                   (lambda (f) (setq edited (alist-get 'name f)))))
+          (should (pdf-form-activate-widget widget)))
+        (should (equal edited "name"))))))
+
+(ert-deftest pdf-form-mode-activates-widgets ()
+  "The mode takes the widget activation handler and leaves no trace."
+  (pdf-test-with-pdf "forms.pdf"
+    (pdf-form-minor-mode 1)
+    (should (memq 'pdf-form-activate-widget
+                  pdf-annot-activate-handler-functions))
+    (pdf-form-minor-mode -1)
+    (should-not (memq 'pdf-form-activate-widget
+                      pdf-annot-activate-handler-functions))
+    (pdf-form-minor-mode 1)
+    (should (memq 'pdf-form-activate-widget
+                  pdf-annot-activate-handler-functions))))
+
 (defun pdf-form-test-image-data (image)
   "Return the data of the IMAGE created by `pdf-view-create-page'."
   (plist-get (cdr image) :data))
