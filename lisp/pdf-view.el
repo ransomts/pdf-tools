@@ -33,6 +33,7 @@
 (require 'bookmark)
 (require 'password-cache)
 (require 'cl-macs)
+(require 'subr-x)
 
 (declare-function cua-copy-region "cua-base")
 (declare-function pdf-tools-pdf-buffer-p "pdf-tools")
@@ -248,6 +249,19 @@ Must be one of `glyph', `word', or `line'."
                  (const word)
                  (const line)))
 
+(defcustom pdf-view-clipboard-program nil
+  "The program `pdf-view-copy-image' feeds a PNG image to.
+
+If this is nil, the program is chosen from the display: `wl-copy'
+on Wayland, `xclip' under X11 and `osascript' on macOS.  Otherwise
+the value is the program, either as a string or as a list of the
+program and its arguments.  The PNG file is written to the
+program's standard input, so it has to read the image from there."
+  :group 'pdf-view
+  :type '(choice (const :tag "Choose automatically" nil)
+                 (string :tag "Program")
+                 (repeat :tag "Program and arguments" string)))
+
 (defcustom pdf-view-mode-line-position-prefix "P"
   "Prefix for page number shown in the mode line."
   :group 'pdf-view
@@ -402,6 +416,8 @@ double click (`word') or a triple click (`line')."
     (define-key map (kbd "'") 'pdf-view-jump-to-register)
 
     (define-key map (kbd "C-c C-i") 'pdf-view-extract-region-image)
+    ;; Copying the page, slice or region as a picture.
+    (define-key map (kbd "C-c C-r c") 'pdf-view-copy-image)
     ;; Rendering
     (define-key map (kbd "C-c C-r m") 'pdf-view-midnight-minor-mode)
     (define-key map (kbd "C-c C-r t") 'pdf-view-themed-minor-mode)
@@ -1926,6 +1942,172 @@ the `convert' program is used."
       (dolist (f (cons result images))
         (when (file-exists-p f)
           (delete-file f))))))
+
+;; Copying a picture is the natural companion of copying the text,
+;; and unlike `pdf-view-extract-region-image' it should neither ask
+;; for a file name nor open a buffer: the picture goes straight to
+;; the system clipboard, ready to be pasted somewhere else.
+
+(defun pdf-view--clipboard-command (file)
+  "Return the command that puts the PNG image in FILE on the clipboard.
+
+The value is a list of the program and its arguments.  FILE is
+only used by programs that are given the file name instead of
+reading the image from standard input, as `osascript' is.
+
+Signal a `user-error' if no suitable program is available."
+  (let ((configured pdf-view-clipboard-program))
+    (cond
+     (configured
+      (if (stringp configured)
+          (list configured)
+        (copy-sequence configured)))
+     ;; `wl-copy' serves the selection from a background process and
+     ;; wants the mime type; Wayland itself has no DISPLAY variable,
+     ;; but `wl-copy' also works as an X client through XWayland.
+     ((and (executable-find "wl-copy")
+           (or (getenv "WAYLAND_DISPLAY")
+               (null (getenv "DISPLAY"))))
+      '("wl-copy" "--type" "image/png"))
+     ((and (getenv "DISPLAY") (executable-find "xclip"))
+      '("xclip" "-selection" "clipboard" "-t" "image/png" "-i"))
+     ;; AppleScript takes the file name, so it needs the quotes around
+     ;; it escaped; the path itself is never handed to a shell.
+     ((eq system-type 'darwin)
+      (list "osascript" "-e"
+            (format "set the clipboard to (read (POSIX file \"%s\") as «class PNGf»)"
+                    (replace-regexp-in-string
+                     "[\"\\\\]" "\\\\\\&" (expand-file-name file)))))
+     (t
+      (user-error
+       "No program to copy an image to the clipboard; install wl-clipboard or xclip")))))
+
+(defun pdf-view--copy-image-file (file)
+  "Put the PNG image in FILE on the system clipboard.
+
+Return FILE.  Signal an error if the program exits unsuccessfully,
+quoting the end of its output, which is where clipboard programs
+usually say what went wrong.
+
+The output goes to a temporary file rather than to a buffer,
+because the program usually leaves a background process behind to
+serve the selection: `wl-copy' forks one, and so does `xclip'.
+That process inherits the standard output; if
+it were a pipe, Emacs would wait for the end of it, which only
+comes when another program takes the selection, and would hang
+until then."
+  (let* ((command (pdf-view--clipboard-command file))
+         (program (car command))
+         (output-file (make-temp-file "pdf-view-clipboard")))
+    (unwind-protect
+        (let ((status (apply #'call-process program file
+                             (list :file output-file) nil (cdr command))))
+          (unless (and (numberp status) (zerop status))
+            (let ((output (with-temp-buffer
+                            (insert-file-contents output-file)
+                            (string-trim (buffer-string)))))
+              (error "The clipboard program `%s' failed (status %s)%s"
+                     program status
+                     (if (string-empty-p output)
+                         ""
+                       (concat ": " output))))))
+      (delete-file output-file)))
+  file)
+
+(defun pdf-view--png-size (file)
+  "Return the size of the PNG image in FILE as (WIDTH . HEIGHT).
+
+The size is read from the image's header, because `image-size'
+needs a window system and this also has to work without one."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally file nil 0 24)
+    (let ((data (buffer-string)))
+      (unless (and (= (length data) 24)
+                   (string= (substring data 0 8) "\211PNG\r\n\032\n")
+                   (string= (substring data 12 16) "IHDR"))
+        (error "Not a PNG image: %s" file))
+      (let ((width 0)
+            (height 0))
+        (dotimes (i 4)
+          (setq width (+ (* width 256) (aref data (+ 16 i)))
+                height (+ (* height 256) (aref data (+ 20 i)))))
+        (cons width height)))))
+
+(defun pdf-view--edges-bounding-box (edges)
+  "Return the box around the list of edge lists EDGES.
+
+A region is usually a single rectangle, but a selection by words
+or lines has one rectangle per line; copying such a region takes
+the box around all of them, which is what a picture of the
+selection should be."
+  (if (null (cdr edges))
+      (car edges)
+    (let ((box (car edges)))
+      (dolist (edge (cdr edges) box)
+        (setq box (list (min (nth 0 box) (nth 0 edge))
+                        (min (nth 1 box) (nth 1 edge))
+                        (max (nth 2 box) (nth 2 edge))
+                        (max (nth 3 box) (nth 3 edge))))))))
+
+(defun pdf-view-copy-image (&optional arg)
+  "Copy the page, the slice or the region to the clipboard as a PNG.
+
+What is copied is the current slice if the window shows one,
+otherwise the active region, otherwise the whole current page.  A
+region that consists of several rectangles, as a selection by
+words or lines does, is copied as the box around them.
+
+The page is rendered at the width it is displayed with, so that
+the picture is what you see.  With a numeric prefix ARG it is
+rendered ARG times as wide, which makes a cleaner picture for a
+slide or a print-out.  The region is deactivated afterwards, as
+`pdf-view-kill-ring-save' does.
+
+The clipboard receives the PNG image, not the page object of the
+PDF: pasting it into a mail, a document or an image editor gives a
+picture, with no text and nothing selectable.  Use
+`pdf-view-kill-ring-save' when it is the text you want.  Which
+program puts the image on the clipboard is described by
+`pdf-view-clipboard-program'."
+  (interactive "P")
+  (pdf-util-assert-pdf-buffer)
+  (let* ((slice (pdf-view-current-slice))
+         (region (and (not slice)
+                      (pdf-view-active-region-p)
+                      (pdf-view-active-region)))
+         (page (if region (car region) (pdf-view-current-page)))
+         (edges (cond (slice
+                       (list (nth 0 slice) (nth 1 slice)
+                             (+ (nth 0 slice) (nth 2 slice))
+                             (+ (nth 1 slice) (nth 3 slice))))
+                      (region
+                       (pdf-view--edges-bounding-box (cdr region)))
+                      (t '(0 0 1 1))))
+         ;; The size of the whole page at the current zoom level; the
+         ;; crop below cuts the copied part out of it.
+         (size (pdf-view-image-size nil nil page))
+         (times (if arg (max 1 (prefix-numeric-value arg)) 1))
+         (width (round (* times (car size))))
+         (file (make-temp-file "pdf-view-copy" nil ".png"))
+         (coding-system-for-write 'binary))
+    (unwind-protect
+        (progn
+          (write-region (pdf-info-renderpage page width :crop-to edges)
+                        nil file nil 'no-message)
+          (pdf-view--copy-image-file file)
+          (when region
+            (pdf-view-deactivate-region))
+          (let ((png (pdf-view--png-size file)))
+            (message "Copied %s (%dx%d px) to the clipboard as a %dx%d px PNG."
+                     (cond (slice (format "the slice of page %d" page))
+                           (region (format "the region of page %d" page))
+                           (t (format "page %d" page)))
+                     (round (* (- (nth 2 edges) (nth 0 edges)) (car size)))
+                     (round (* (- (nth 3 edges) (nth 1 edges)) (cdr size)))
+                     (car png) (cdr png))))
+      (when (file-exists-p file)
+        (delete-file file)))))
 
 (defun pdf-view-set-selection-style (&optional style)
   "Set `pdf-view-selection-style' to STYLE in the current buffer.

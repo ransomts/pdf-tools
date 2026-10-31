@@ -143,6 +143,9 @@
     ["Copy region" pdf-view-kill-ring-save
      :keys "\\[kill-ring-save]"
      :active (pdf-view-active-region-p)]
+    ["Copy image" pdf-view-copy-image
+     :keys "\\[pdf-view-copy-image]"
+     :help "Copy the page, slice or region to the clipboard as a picture"]
     ("Selection style"
      ["Glyph" (pdf-view-set-selection-style 'glyph)
       :style radio
