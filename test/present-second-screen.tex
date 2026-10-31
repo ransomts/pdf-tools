@@ -1,0 +1,13 @@
+% pdf-present test deck: notes on the right half of double-width pages,
+% as Tim's presenter builds make them.  Used by test/pdf-present-test.el.
+%
+% The three present-*.tex decks share present-slides.tex and differ only
+% in the \setbeameroption line.  Rebuild one from test/ with
+%   pdflatex present-second-screen.tex && pdflatex present-second-screen.tex
+% and delete the .aux/.log/.nav/.out/.snm/.toc files afterwards.
+\documentclass[aspectratio=169]{beamer}
+\setbeamertemplate{navigation symbols}{}
+\setbeameroption{show notes on second screen=right}
+\begin{document}
+\input{present-slides}
+\end{document}
