@@ -1,0 +1,58 @@
+% Deck for trying pdf-present: speaker notes on the right half of each
+% page.  Built by ./build.sh.
+\documentclass[aspectratio=169]{beamer}
+\setbeamertemplate{navigation symbols}{}
+\setbeameroption{show notes on second screen=right}
+\title{Presenting from Emacs}
+\subtitle{A demo deck for \texttt{pdf-present}}
+\date{}
+\begin{document}
+
+\begin{frame}
+  \titlepage
+  \note{Welcome. The presenter window shows this note, the next slide, the elapsed time and the clock. Press d to set a talk length and watch the countdown.}
+\end{frame}
+
+\begin{frame}{Two windows, not two fullscreen frames}
+  \begin{itemize}
+  \item The audience window shows the slide alone
+  \item The presenter window shows this slide, the next one and the notes
+  \item Both are plain windows, so Wayland compositors place them
+  \end{itemize}
+  \note{Point out that nothing re-renders when the windows settle: each is made in its final size.}
+\end{frame}
+
+\begin{frame}{Overlays count as slides}
+  \begin{itemize}
+  \item<1-> First step
+  \item<2-> Second step, on the next page of the PDF
+  \item<3-> Third step
+  \end{itemize}
+  \note{Press n three times here. The slide counter uses the page labels, so it says 3 for all three steps.}
+\end{frame}
+
+\begin{frame}{Jumping around}
+  \begin{itemize}
+  \item \texttt{g} goes to a slide by number
+  \item \texttt{T} shows a thumbnail grid; the audience keeps the current slide
+  \item \texttt{<} and \texttt{>} go to the first and last slides
+  \end{itemize}
+  \note{Try T now and pick the title slide, then come back with g.}
+\end{frame}
+
+\begin{frame}{Blank the screen}
+  \centering\Large Press \texttt{b} for black, \texttt{w} for white
+  \note{Useful when the class should look at the board, not the slide. Any key brings the slide back.}
+\end{frame}
+
+\begin{frame}{The deck reloads when it changes}
+  Edit this slide in \texttt{demo-slides.tex}, run \texttt{./build.sh}, and the slides re-read in place, keeping the current slide and the timers.
+  \note{This is the edit-while-presenting loop: fix a typo during questions without restarting the talk.}
+\end{frame}
+
+\begin{frame}
+  \centering\Huge Questions?
+  \note{q quits and restores your buffer, windows and frames.}
+\end{frame}
+
+\end{document}

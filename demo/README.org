@@ -1,0 +1,97 @@
+#+title: pdf-tools feature tour
+#+startup: overview
+
+A guided tour of what the =tim= branch adds to pdf-tools. =tour.pdf= has one page per feature, and each page says what to try in an orange box; this file has the same steps as checklists. =demo-slides.pdf= is a Beamer deck for trying the presenter view.
+
+* Files
+
+- =tour.pdf= :: the tour, 15 pages, tagged PDF/UA-2 with a form, an empty signature field, three layers and an attached CSV.
+- =demo-slides.pdf= :: seven slides with speaker notes on the right half of each page, for =pdf-present=.
+- =roster.csv= :: one row for filling in the form on page 5 (also attached to =tour.pdf=).
+- =batch/= :: three blank copies of the tour and a =roster.csv= that names them, for the batch fill. Made by =build.sh=, not tracked.
+- =signature.png= :: an image of a signature, for image stamps and signing with an image.
+- =tour.tex=, =demo-slides.tex=, =sigfield.py=, =build.sh= :: the sources. LaTeX can't write a signature field or a document-level attachment, so =build.sh= adds both after LaTeX with =sigfield.py= and qpdf.
+
+* Before you start
+
+Several steps write to the file. Work in a copy, or run =./build.sh= afterwards for fresh ones (it needs TeX Live 2025 or later, qpdf, pdftotext and python3). =git checkout demo/tour.pdf= also works.
+
+Free text needs poppler-glib 24.12 or later and ink 25.06, so epdfinfo has to be built against such a poppler (see =scripts/build-epdfinfo-poppler26.sh= in Tim's Emacs configuration for one way). =M-: (pdf-info-features)= lists what your server can do.
+
+* Page 1: contents
+- [ ] Click a line of the contents to follow its link.
+
+* Page 2: selecting, copying and reflowing text
+- [ ] Double-click /quartz/ to select the word; triple-click the same line to select it.
+- [ ] Double-click, keep the button down and drag: the selection grows by whole words.
+- [ ] =S-mouse-1= on a later word moves the end of the selection there.
+- [ ] =M-w= copies the selected text.
+- [ ] Select a region around the picture and press =C-c C-r c= (=pdf-view-copy-image=); paste it into an image editor. With no region it copies the whole page; =C-u 3 C-c C-r c= renders three times as wide.
+- [ ] =M-x pdf-reflow= shows the text reflowed, headings and all, in a buffer of its own. =n= / =p= move by block, =M-n= / =M-p= by heading, =RET= on a block shows it in the PDF, =o= does so without leaving the text.
+
+* Page 3: annotations
+Select a region in a target box first; for a line, the drag sets its two ends.
+- [ ] Square =C-c C-a r=, circle =C-c C-a c=, line =C-c C-a L=, stamp =C-c C-a S=.
+- [ ] Free text =C-c C-a f=: type it in the minibuffer. Click it later to change the text.
+- [ ] Ink =C-c C-a i=: each drag is a stroke; =RET= saves them as one annotation.
+- [ ] Right-click a square: /Change fill color/.
+- [ ] Drag an annotation to move it; =S=-drag a corner to resize it.
+- [ ] Right-click one, /Move or resize/: arrow keys move it, =S=-arrows resize it.
+- [ ] =M-x pdf-annot-add-image-stamp-annotation= on a region places =signature.png=.
+- [ ] =C-c C-a l= lists them all. =C-x C-s= saves.
+
+* Page 4: exchanging and flattening annotations
+- [ ] With the annotations from page 3 saved: =M-x pdf-xfdf-export= writes =tour.xfdf=. Ink annotations are left out: poppler can't read their strokes back.
+- [ ] Get a clean copy (=./build.sh=, or delete the annotations with =C-c C-a D= and save), open it, and =M-x pdf-xfdf-import= =tour.xfdf=: the annotations come back.
+- [ ] After filling in page 5: =C-c C-o f= (=pdf-pages-flatten-annotations=) makes the values part of the page. =C-/= undoes it.
+
+* Page 5: forms and CSV
+- [ ] Click a field to fill it in. =TAB= / =S-TAB= move between fields; =C-c C-e= picks one by name.
+- [ ] /Topics/ allows several choices: they are read with completion, separated by commas.
+- [ ] =C-c C-s= hides and shows the field marks.
+- [ ] =M-x pdf-form-reset= clears the form. =C-x C-s= saves the values into the file.
+- [ ] =C-c C-f e= exports the values to a CSV file.
+- [ ] =C-c C-f i= on =roster.csv= fills in Ada Lovelace's row.
+- [ ] =C-c C-f b= on =batch/roster.csv= fills in =batch/ada.pdf=, =grace.pdf= and =alan.pdf=, one row each, saving each one. Open them to see.
+
+* Page 6: signatures and certificates
+- [ ] =M-x pdf-form-certificates= lists the certificates of the NSS database. =n= creates a self-signed one to try signing with (=i= imports a =.p12=, =d= makes one the default, =x= deletes one).
+- [ ] Click the framed box (the empty field /approval/) to sign into it. The signed document replaces the file; a copy of the unsigned one goes to =pdf-form-backup-directory=.
+- [ ] Or =M-x pdf-form-sign= and select a rectangle anywhere on a page for a new signature field.
+- [ ] Click the signed field, or =M-x pdf-form-signatures=, to check who signed and whether the signature is valid.
+- [ ] =M-x pdf-form-sign-with-image= places =signature.png= and flattens it into the page. This is an everyday signature, not a digital one.
+
+* Page 7: layers
+- [ ] =C-c C-l= (=pdf-layers=) lists /Hint/, /Answer/ (hidden) and /Draft watermark/.
+- [ ] =RET=, =SPC= or =t= toggles the layer at point; =+= / =-= show and hide it.
+- [ ] The link /show or hide the answer/ on the page toggles the Answer layer.
+- [ ] =g= (=revert-buffer=) in the PDF resets the layers: they are view state, not saved.
+
+* Pages 8 to 12: thumbnails, page operations and undo
+Pages 9 to 12 are there to be fixed: one is upside down, one should go, and two are in the wrong order.
+- [ ] =T= shows the thumbnail grid; =RET= or a click goes to a page; =+= / =-= resize the thumbnails.
+- [ ] In the grid: =m= marks pages (=u=, =U= unmark), then =D= deletes, =X= extracts to a new file, =M= moves, =R= / =L= rotate the marked pages.
+- [ ] In the document: =C-c C-o r= twice on page 9 turns it the right way up.
+- [ ] =C-c C-o d= on page 10 deletes it.
+- [ ] =C-c C-o m= moves /Part 1 of 2/ before /Part 2 of 2/. =C-u C-c C-o m= takes a range such as =11-12=.
+- [ ] =C-/= undoes the last page operation; press it again for the one before.
+
+* Page 13: attachments and metadata
+- [ ] =C-c C-a A= lists the document's attachments (=roster.csv=) in Dired.
+- [ ] =C-c C-a += attaches a file; =C-c C-a -= removes one.
+- [ ] =I= shows the metadata; =e= there edits it (or =M-x pdf-misc-edit-metadata=). =C-c C-c= applies, =C-c C-k= cancels; then save the buffer.
+- [ ] Change the title and save: a warning says the XMP title, which accessibility checkers read, now differs.
+
+* Page 14: accessibility report
+- [ ] =M-x pdf-a11y-report=: tagging, language, the PDF/UA claim, fonts, figures with their alt text (the /C/ picture's alt text is only a file name, and is flagged), headings in reading order, and the reading order of each page.
+- [ ] Every entry is a button that shows the element in the PDF.
+
+* Page 15: presenting
+Open =demo-slides.pdf=.
+- [ ] =M-x pdf-present= (=C-u= first to choose the audience's monitor). The audience window shows the slide alone; the presenter window shows the current and next slides, the notes, the timers and the clock.
+- [ ] =n= / =p= (or PageDown/PageUp and the arrow keys a clicker sends) move; =<= / =>= go to the first and last slides; =g= goes to a slide by number.
+- [ ] =T= picks a slide from a thumbnail grid; the audience keeps the current slide meanwhile.
+- [ ] =b= / =w= blank the screen black or white.
+- [ ] =d= sets the talk's length; the presenter view counts down and shows overtime. =t= / =r= pause or reset the timer.
+- [ ] Edit a slide in =demo-slides.tex= and run =./build.sh= while presenting: the deck reloads in place.
+- [ ] =q= quits and restores the buffer, windows and frames.
