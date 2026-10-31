@@ -1193,9 +1193,11 @@ command_arg_parse_arg (const epdfinfo_t *ctx, const char *arg,
         cerror_if_not ((strlen (arg) == 7
                         && 3 == sscanf (arg, "#%2x%2x%2x", &r, &g, &b)),
                        error_msg, "Invalid color: %s", arg);
-        cmd_arg->value.color.red = r << 8;
-        cmd_arg->value.color.green = g << 8;
-        cmd_arg->value.color.blue = b << 8;
+        /* Scale 0xff to 0xffff, so that colors survive a round trip
+           through a saved document. */
+        cmd_arg->value.color.red = r * 257;
+        cmd_arg->value.color.green = g * 257;
+        cmd_arg->value.color.blue = b * 257;
       }
       break;
     case ARG_INVALID:
