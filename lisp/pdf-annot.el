@@ -392,6 +392,7 @@ in a PDF buffer, where asking is cheap and meaningful."
     (when (keymapp smap)
       (when (pdf-info-writable-annotations-p)
         (define-key smap "D" #'pdf-annot-delete)
+        (define-key smap "M" #'pdf-annot-adjust)
         (define-key smap "t" #'pdf-annot-add-text-annotation)
         (when (pdf-info-markup-annotations-p)
           (define-key smap "m" #'pdf-annot-add-markup-annotation)
@@ -454,7 +455,15 @@ in a PDF buffer, where asking is cheap and meaningful."
                        (pdf-annot-delete a)
                        (message "Annotation deleted"))
                     :help
-                    "Delete this annotation.")))
+                    "Delete this annotation."))
+      (unless (eq (pdf-annot-get-type a) 'line)
+        (define-key menu [move-or-resize-annotation]
+          `(menu-item "Move or resize"
+                      ,(lambda ()
+                         (interactive)
+                         (pdf-annot-adjust a))
+                      :help
+                      "Move this annotation with the arrow keys, resize it with S-arrows."))))
     (define-key menu [goto-annotation]
       `(menu-item "List annotation"
                   ,(lambda ()
@@ -772,6 +781,9 @@ Annotation types are defined in `pdf-annot-markup-annotation-types'."
              ;; epdfinfo does not handle stamps as markup annotations.
              (not (eq type 'stamp))
              (memq property '(label opacity popup popup-is-open)))
+        ;; Only text markup annotations have text regions.
+        (and (pdf-annot-get a 'markup-edges)
+             (eq property 'markup-edges))
         (and (pdf-annot-text-annotation-p a)
              (memq property '(icon is-open)))
         (and (memq type '(square circle))
@@ -1019,6 +1031,262 @@ See `pdf-annot-image-position' for IMAGE-SIZE."
               (if w (+ edges-left w) edges-right)
               (if h (+ edges-top h) edges-bot))))))
 
+;; ** Moving and resizing
+
+(defcustom pdf-annot-resizable-types '(square circle free-text stamp)
+  "A list of annotation types, whose size may be changed by dragging.
+
+Only annotations that are drawn as a single rectangle can be
+resized: their text, if any, is laid out in the new rectangle by
+the viewer.  Text markup annotations \(see
+`pdf-annot-markup-annotation-types') have no independent size,
+their text regions follow the text they mark.
+
+Resizing with the mouse means dragging a corner with
+`S-down-mouse-1' on the annotation, i.e. with the gesture that
+otherwise extends the active region.  Remove a type from this list
+to get that gesture back over it.  `pdf-annot-adjust' resizes the
+same types with the keyboard."
+  :type '(set (const square) (const circle) (const free-text)
+              (const stamp) (const text) (const file))
+  :group 'pdf-annot)
+
+(defcustom pdf-annot-resize-min-size 0.01
+  "The smallest width and height an annotation may be resized to.
+
+The value is relative to the size of the page, so 0.01 means one
+percent of the page's width and height."
+  :type 'number
+  :group 'pdf-annot)
+
+(defcustom pdf-annot-adjust-step 1
+  "Distance in pixels by which `pdf-annot-adjust' moves an annotation.
+
+With a numeric prefix argument, `pdf-annot-adjust' uses that many
+pixels for every step instead."
+  :type 'integer
+  :group 'pdf-annot)
+
+(defconst pdf-annot--corners '(left-top right-top left-bot right-bot)
+  "The corners of an annotation's rectangle, as understood by resizing.")
+
+(defun pdf-annot--move-edges (edges dx dy)
+  "Return EDGES moved by DX and DY.
+
+EDGES is a list of \(LEFT TOP RIGHT BOT\) rectangles in relative
+coordinates; all of them are moved by the same distance, so a
+group of text regions keeps its shape.  The group is not allowed
+to leave the page."
+  (let* ((left (apply #'min (mapcar (lambda (e) (nth 0 e)) edges)))
+         (top (apply #'min (mapcar (lambda (e) (nth 1 e)) edges)))
+         (right (apply #'max (mapcar (lambda (e) (nth 2 e)) edges)))
+         (bot (apply #'max (mapcar (lambda (e) (nth 3 e)) edges)))
+         (dx (max (- left) (min dx (- 1.0 right))))
+         (dy (max (- top) (min dy (- 1.0 bot)))))
+    (mapcar (lambda (e)
+              (list (+ (nth 0 e) dx) (+ (nth 1 e) dy)
+                    (+ (nth 2 e) dx) (+ (nth 3 e) dy)))
+            edges)))
+
+(defun pdf-annot--resize-edges (edges corner dx dy)
+  "Resize the rectangle EDGES by moving CORNER by DX and DY.
+
+CORNER is one of `pdf-annot--corners'.  DX and DY are relative
+distances.  The rectangle is kept on the page and at least
+`pdf-annot-resize-min-size' wide and high, so that a corner can
+not cross the one opposite to it."
+  (unless (memq corner pdf-annot--corners)
+    (error "Unknown corner: %s" corner))
+  (pdf-util-with-edges (edges)
+    (let ((left edges-left)
+          (top edges-top)
+          (right edges-right)
+          (bot edges-bot)
+          (min pdf-annot-resize-min-size))
+      (when (memq corner '(left-top left-bot))
+        (setq left (min (+ left dx) (- right min))))
+      (when (memq corner '(right-top right-bot))
+        (setq right (max (+ right dx) (+ left min))))
+      (when (memq corner '(left-top right-top))
+        (setq top (min (+ top dy) (- bot min))))
+      (when (memq corner '(left-bot right-bot))
+        (setq bot (max (+ bot dy) (+ top min))))
+      (list (max 0.0 left) (max 0.0 top) (min 1.0 right) (min 1.0 bot)))))
+
+(defun pdf-annot-move (annotation dx dy &optional image-size)
+  "Move ANNOTATION by DX and DY pixels.
+
+DX and DY are distances in the page image; IMAGE-SIZE is the
+size of that image and defaults to the one displayed in the
+selected window.  Text markup annotations move all of their text
+regions, other annotations move their rectangle.
+
+Line annotations are not supported: their start and end points
+are edited with `pdf-annot-activate-annotation'.
+
+Return the modified annotation."
+  (setq annotation (pdf-annot--ensure-fresh annotation))
+  (when (eq (pdf-annot-get-type annotation) 'line)
+    (user-error "Line annotations are moved by editing their end points"))
+  (unless image-size
+    (pdf-util-assert-pdf-window)
+    (setq image-size (pdf-view-image-size)))
+  (let ((dx (/ dx (float (car image-size))))
+        (dy (/ dy (float (cdr image-size)))))
+    (if (pdf-annot-get annotation 'markup-edges)
+        (pdf-annot-put annotation 'markup-edges
+          (pdf-annot--move-edges
+           (pdf-annot-get annotation 'markup-edges) dx dy))
+      (pdf-annot-put annotation 'edges
+        (car (pdf-annot--move-edges
+              (list (pdf-annot-get annotation 'edges)) dx dy))))))
+
+(defun pdf-annot-resize (annotation dx dy &optional corner image-size)
+  "Resize ANNOTATION by moving CORNER by DX and DY pixels.
+
+CORNER defaults to `right-bot' and is one of `pdf-annot--corners'.
+DX and DY are distances in the page image; IMAGE-SIZE is the size
+of that image and defaults to the one displayed in the selected
+window.
+
+Only the types in `pdf-annot-resizable-types' can be resized, text
+markup annotations can not: their text regions are determined by
+the text they mark.
+
+Return the modified annotation."
+  (setq annotation (pdf-annot--ensure-fresh annotation))
+  (unless (memq (pdf-annot-get-type annotation) pdf-annot-resizable-types)
+    (user-error "A %s annotation can not be resized"
+                (pdf-annot-get-type annotation)))
+  (unless image-size
+    (pdf-util-assert-pdf-window)
+    (setq image-size (pdf-view-image-size)))
+  (pdf-annot-put annotation 'edges
+    (pdf-annot--resize-edges
+     (pdf-annot-get annotation 'edges)
+     (or corner 'right-bot)
+     (/ dx (float (car image-size)))
+     (/ dy (float (cdr image-size))))))
+
+(defun pdf-annot--corner-at-position (annotation pos &optional image-size)
+  "Return the corner of ANNOTATION closest to POS.
+
+POS is a cons \(X . Y\) of image coordinates, IMAGE-SIZE is the
+size of the image and defaults to the one in the selected window.
+The result is one of `pdf-annot--corners'."
+  (let* ((image-size (or image-size (pdf-view-image-size)))
+         (edges (pdf-util-scale
+                 (car (pdf-annot-get-display-edges annotation))
+                 image-size
+                 'round))
+         (best nil)
+         (best-distance nil))
+    (pdf-util-with-edges (edges)
+      (dolist (corner (list (list 'left-top edges-left edges-top)
+                            (list 'right-top edges-right edges-top)
+                            (list 'left-bot edges-left edges-bot)
+                            (list 'right-bot edges-right edges-bot))
+              best)
+        (let ((distance (+ (expt (- (nth 1 corner) (car pos)) 2)
+                           (expt (- (nth 2 corner) (cdr pos)) 2))))
+          (when (or (null best-distance) (< distance best-distance))
+            (setq best-distance distance
+                  best (car corner))))))))
+
+(defun pdf-annot-mouse-resize (event &optional annot corner)
+  "Resize an annotation by dragging a corner at EVENT's position.
+
+EVENT should be a mouse event originating the request and is used
+as a reference point.
+
+ANNOT is the annotation to operate on and defaults to the
+annotation at EVENT's start position.  CORNER defaults to the
+corner of ANNOT closest to the start position.
+
+This function does not return until the operation is completed,
+i.e. a non mouse-movement event is read."
+  (interactive "@e")
+  (pdf-util-assert-pdf-window (posn-window (event-start event)))
+  (select-window (posn-window (event-start event)))
+  (let* ((start (posn-object-x-y (event-start event)))
+         (a (or annot (pdf-annot-at-position start))))
+    (unless a
+      (error "No annotation at this position: %s" start))
+    (let ((corner (or corner (pdf-annot--corner-at-position a start)))
+          (last start)
+          (window (selected-window))
+          make-pointer-invisible)
+      (when (pdf-util-track-mouse-dragging (ev 0.1)
+              (when (and (eq window (posn-window (event-start ev)))
+                         (eq 'image (car-safe (posn-object (event-start ev)))))
+                (let ((pdf-view-inhibit-hotspots t)
+                      (pdf-annot-inhibit-modification-hooks t)
+                      (pdf-cache-image-inihibit t)
+                      (xy (posn-object-x-y (event-start ev))))
+                  (pdf-annot-resize a (- (car xy) (car last))
+                                    (- (cdr xy) (cdr last))
+                                    corner)
+                  (setq last xy)
+                  (pdf-view-redisplay))))
+        (pdf-annot-run-modified-hooks))
+      nil)))
+
+(defun pdf-annot-adjust (annotation)
+  "Move or resize ANNOTATION with the keyboard.
+
+The arrow keys move it by `pdf-annot-adjust-step' pixels, the
+shifted arrow keys resize it from its bottom right corner.  With a
+numeric prefix argument, every step is that many pixels.  Any
+other key ends the adjustment.
+
+Text markup annotations can be moved, but not resized.
+
+Return the adjusted annotation."
+  (interactive
+   (list (pdf-annot-read-annotation
+          "Click on the annotation to move or resize")))
+  (setq annotation (pdf-annot--ensure-fresh annotation))
+  (let ((step (if current-prefix-arg
+                  (prefix-numeric-value current-prefix-arg)
+                pdf-annot-adjust-step))
+        (key nil)
+        (done nil))
+    (while (not done)
+      (message "Arrows move by %d px, S-arrows resize, any other key ends"
+               step)
+      ;; `read-key-sequence' returns a vector for function keys like
+      ;; the arrows and for mouse events, a string for most others.
+      (setq key (read-key-sequence nil)
+            done t)
+      (cond
+       ((equal key (kbd "<left>"))
+        (setq annotation (pdf-annot-move annotation (- step) 0)
+              done nil))
+       ((equal key (kbd "<right>"))
+        (setq annotation (pdf-annot-move annotation step 0)
+              done nil))
+       ((equal key (kbd "<up>"))
+        (setq annotation (pdf-annot-move annotation 0 (- step))
+              done nil))
+       ((equal key (kbd "<down>"))
+        (setq annotation (pdf-annot-move annotation 0 step)
+              done nil))
+       ((equal key (kbd "S-<left>"))
+        (setq annotation (pdf-annot-resize annotation (- step) 0)
+              done nil))
+       ((equal key (kbd "S-<right>"))
+        (setq annotation (pdf-annot-resize annotation step 0)
+              done nil))
+       ((equal key (kbd "S-<up>"))
+        (setq annotation (pdf-annot-resize annotation 0 (- step))
+              done nil))
+       ((equal key (kbd "S-<down>"))
+        (setq annotation (pdf-annot-resize annotation 0 step)
+              done nil)))
+      (unless done
+        (pdf-view-redisplay))))
+  annotation)
+
 (defun pdf-annot-at-position (pos)
   "Return annotation at POS in the selected window.
 
@@ -1112,6 +1380,8 @@ SIZE is a cons (SX . SY), by which edges are scaled."
                 size 'round))
         (moveable-p (memq (pdf-annot-get a 'type)
                           pdf-annot-moveable-types))
+        (resizable-p (memq (pdf-annot-get a 'type)
+                           pdf-annot-resizable-types))
         hotspots)
     (dolist (e edges)
       (pdf-util-with-edges (e)
@@ -1122,16 +1392,18 @@ SIZE is a cons (SX . SY), by which edges are scaled."
                  help-echo
                  ,(pdf-annot-print-annotation a)))
               hotspots)))
-    (pdf-annot-create-hotspot-binding id moveable-p a)
+    (pdf-annot-create-hotspot-binding id moveable-p a resizable-p)
     hotspots))
 
 ;; FIXME: Define a keymap as a template for this. Much cleaner.
-(defun pdf-annot-create-hotspot-binding (id moveable-p annotation)
+(defun pdf-annot-create-hotspot-binding (id moveable-p annotation
+                                            &optional resizable-p)
   "Create a local keymap for interacting with ANNOTATION using the mouse.
 
 ID is the identifier for the ANNOTATION, as returned
 `pdf-annot-get-id'. MOVEABLE-P indicates whether the annotation
-is moveable."
+is moveable, RESIZABLE-P whether dragging one of its corners
+resizes it."
   ;; Activating
   (local-set-key
    (vector id 'mouse-1)
@@ -1145,6 +1417,13 @@ is moveable."
      (lambda (ev)
        (interactive "@e")
        (pdf-annot-mouse-move ev annotation))))
+  ;; Resize
+  (when resizable-p
+    (local-set-key
+     (vector id 'S-down-mouse-1)
+     (lambda (ev)
+       (interactive "@e")
+       (pdf-annot-mouse-resize ev annotation))))
   ;; Context Menu
   (local-set-key
    (vector id 'down-mouse-3)
