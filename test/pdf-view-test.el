@@ -252,3 +252,219 @@ The word \"replacement\" spans x from 477 to 563 pixel in it, at y 195.")
            (list (lambda (_) "/tmp/test.synctex.gz"))))
       (should (eq (pdf-sync--when-synctex 'pdf-sync-backward-search-mouse)
                   'pdf-sync-backward-search-mouse)))))
+
+;;; Copying the page, slice or region as an image
+
+(defun pdf-view-test--png-size (file)
+  "Return the size of the PNG image in FILE as (WIDTH . HEIGHT)."
+  ;; `image-size' needs a window system, which batch Emacs has not, so
+  ;; the size is read from the image's header.
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally file nil 0 24)
+    (let ((data (buffer-string)))
+      (unless (string= (substring data 0 8) "\211PNG\r\n\032\n")
+        (error "Not a PNG image: %s" file))
+      (cons (logior (ash (aref data 16) 24) (ash (aref data 17) 16)
+                    (ash (aref data 18) 8) (aref data 19))
+            (logior (ash (aref data 20) 24) (ash (aref data 21) 16)
+                    (ash (aref data 22) 8) (aref data 23))))))
+
+(defmacro pdf-view-test--with-copy (&rest body)
+  "Run BODY in a PDF buffer with the clipboard stubbed out.
+
+The page is taken to be displayed 600 pixels wide, as if the window
+were that wide; `copied-file' is bound to the file that the command
+hands to the clipboard, and `display-size' to the page's size in
+pixels.  The copied file is deleted when BODY exits."
+  (declare (indent 0) (debug t))
+  `(pdf-test-with-test-pdf-view
+     (let* ((pagesize (pdf-cache-pagesize 1))
+            (display-size (cons 600
+                                (round (* 600 (/ (float (cdr pagesize))
+                                                 (car pagesize))))))
+            (width (car display-size))
+            (copied-file nil)
+            (messages nil))
+       ;; Batch Emacs displays no image, so the page's size has to be
+       ;; stubbed; the page is shown in no window, hence the pseudo
+       ;; entry `t' of the winprops.  `message' does not reach the echo
+       ;; area in batch, so the reported message is recorded instead.
+       (setq-local image-mode-winprops-alist nil)
+       (image-mode-window-put 'page 1 t)
+       (cl-letf (((symbol-function 'pdf-view-image-size)
+                  (lambda (&rest _) display-size))
+                 ((symbol-function 'pdf-view-redisplay) #'ignore)
+                 ((symbol-function 'message)
+                  (lambda (format-string &rest args)
+                    (push (apply #'format format-string args) messages)))
+                 ;; The command deletes the file once the clipboard has
+                 ;; it, so the recorder takes a copy.
+                 ((symbol-function 'pdf-view--copy-image-file)
+                  (lambda (file)
+                    (setq copied-file (make-temp-file "pdf-view-copy-test" nil
+                                                      ".png"))
+                    (copy-file file copied-file t)
+                    copied-file)))
+         (unwind-protect
+             (progn ,@body)
+           (when (and copied-file (file-exists-p copied-file))
+             (delete-file copied-file)))))))
+
+(ert-deftest pdf-view-copy-image-file-command ()
+  "The clipboard program is chosen from the display and the system."
+  ;; Wayland, even with DISPLAY set through XWayland.
+  (let ((WAYLAND_DISPLAY "wayland-0")
+        (DISPLAY ":0")
+        (pdf-view-clipboard-program nil))
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (program)
+                 (and (string= program "wl-copy") "/usr/bin/wl-copy"))))
+      (should (equal (pdf-view--clipboard-command "/tmp/image.png")
+                     '("wl-copy" "--type" "image/png")))))
+  ;; Still Wayland when there is no DISPLAY at all.
+  (let ((WAYLAND_DISPLAY nil)
+        (DISPLAY nil)
+        (pdf-view-clipboard-program nil))
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (program)
+                 (and (string= program "wl-copy") "/usr/bin/wl-copy"))))
+      (should (equal (pdf-view--clipboard-command "/tmp/image.png")
+                     '("wl-copy" "--type" "image/png")))))
+  ;; X11.
+  (let ((WAYLAND_DISPLAY nil)
+        (DISPLAY ":0")
+        (pdf-view-clipboard-program nil))
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (program)
+                 (and (string= program "xclip") "/usr/bin/xclip"))))
+      (should (equal (pdf-view--clipboard-command "/tmp/image.png")
+                     '("xclip" "-selection" "clipboard" "-t" "image/png"
+                       "-i")))))
+  ;; macOS, where the file name goes into the AppleScript.
+  (let ((WAYLAND_DISPLAY nil)
+        (DISPLAY nil)
+        (system-type 'darwin)
+        (pdf-view-clipboard-program nil))
+    (cl-letf (((symbol-function 'executable-find) #'ignore))
+      (should (equal (pdf-view--clipboard-command "/tmp/a b.png")
+                     '("osascript" "-e"
+                       "set the clipboard to (read (POSIX file \"/tmp/a b.png\") as «class PNGf»)")))))
+  ;; Nothing usable installed.
+  (let ((WAYLAND_DISPLAY nil)
+        (DISPLAY nil)
+        (system-type 'gnu/linux)
+        (pdf-view-clipboard-program nil))
+    (cl-letf (((symbol-function 'executable-find) #'ignore))
+      (should-error (pdf-view--clipboard-command "/tmp/image.png")
+                    :type 'user-error)))
+  ;; A configured program wins over the automatic choice.
+  (let ((pdf-view-clipboard-program '("my-copy" "--png")))
+    (should (equal (pdf-view--clipboard-command "/tmp/image.png")
+                   '("my-copy" "--png")))))
+
+(ert-deftest pdf-view-copy-image-writes-png ()
+  "Copying the page renders it at the displayed size."
+  (pdf-view-test--with-copy
+    (pdf-view-copy-image)
+    (should (stringp copied-file))
+    (should (file-exists-p copied-file))
+    (should (equal (pdf-view-test--png-size copied-file) display-size))
+    (should (string-match-p (format "Copied page 1 (%dx%d px)"
+                                    width (cdr display-size))
+                            (car messages)))))
+
+(ert-deftest pdf-view-copy-image-arg ()
+  "A prefix argument renders the page wider than it is displayed."
+  (pdf-view-test--with-copy
+    (pdf-view-copy-image 2)
+    (let ((size (pdf-view-test--png-size copied-file)))
+      (should (= (car size) (* 2 width)))
+      (should (> (cdr size) (cdr display-size)))
+      (should (< (abs (- (/ (float (car size)) (cdr size))
+                         (/ (float width) (cdr display-size))))
+                 0.01))
+      ;; The report still describes the picture that was on screen,
+      ;; while the PNG is twice as large.
+      (should (string-match-p (format "(%dx%d px) to the clipboard as a %dx%d px PNG"
+                                      width (cdr display-size)
+                                      (car size) (cdr size))
+                              (car messages))))))
+
+(ert-deftest pdf-view-copy-image-slice ()
+  "A slice is copied with its own aspect ratio, not the page's."
+  (pdf-view-test--with-copy
+    (pdf-view-set-slice 0 0 1 0.25)
+    (should (equal (pdf-view-current-slice) '(0 0 1 0.25)))
+    (pdf-view-copy-image)
+    (let ((size (pdf-view-test--png-size copied-file)))
+      (should (= (car size) width))
+      (should (= (cdr size) (round (/ (cdr display-size) 4.0))))
+      (should (> (/ (float (car size)) (cdr size))
+                 (/ (float width) (cdr display-size)))))
+    (should (string-match-p (format "Copied the slice of page 1 (%dx%d px)"
+                                    width (round (/ (cdr display-size) 4.0)))
+                            (car messages)))))
+
+(ert-deftest pdf-view-copy-image-region ()
+  "The active region is copied as the box around it, then deactivated."
+  (pdf-view-test--with-copy
+    (setq pdf-view-active-region (list 1 '(0.25 0.25 0.75 0.5)))
+    (pdf-view-copy-image)
+    (should (equal (pdf-view-test--png-size copied-file)
+                   (cons (/ width 2)
+                         (round (/ (cdr display-size) 4.0)))))
+    (should-not (pdf-view-active-region-p))
+    (should (string-match-p (format "Copied the region of page 1 (%dx%d px)"
+                                    (/ width 2) (round (/ (cdr display-size) 4.0)))
+                            (car messages)))))
+
+;; `pdf-view--copy-image-file' talks to the program for real, with the
+;; `sh' that every system has; no test touches the clipboard.
+
+(ert-deftest pdf-view-copy-image-file-success ()
+  "The image file is the program's standard input, and FILE is returned."
+  (skip-unless (executable-find "sh"))
+  (let* ((png (make-temp-file "pdf-view-test" nil ".png"))
+         (received (make-temp-file "pdf-view-test-received"))
+         (pdf-view-clipboard-program
+          (list "sh" "-c" (format "cat > %s" (shell-quote-argument received))))
+         (contents "not really a PNG, but that does not matter\n"))
+    (unwind-protect
+        (progn
+          (with-temp-file png (insert contents))
+          (should (equal (pdf-view--copy-image-file png) png))
+          (should (equal (with-temp-buffer
+                           (insert-file-contents received)
+                           (buffer-string))
+                         contents)))
+      (delete-file png)
+      (delete-file received))))
+
+(ert-deftest pdf-view-copy-image-file-failure ()
+  "A failing program's error output ends up in the error message."
+  (skip-unless (executable-find "sh"))
+  (let ((png (make-temp-file "pdf-view-test" nil ".png"))
+        (pdf-view-clipboard-program
+         '("sh" "-c" "cat > /dev/null; echo 'no display' >&2; exit 3")))
+    (unwind-protect
+        (let ((error (should-error (pdf-view--copy-image-file png))))
+          (should (string-match-p "failed (status 3)" (cadr error)))
+          (should (string-match-p "no display" (cadr error))))
+      (delete-file png))))
+
+(ert-deftest pdf-view-copy-image-file-does-not-wait-for-background-child ()
+  "A program that leaves a child behind, as wl-copy does, does not hang.
+
+The child inherits the standard output; if that were a pipe, Emacs
+would wait for it to close, which only happens when another program
+takes the selection."
+  (skip-unless (executable-find "sh"))
+  (let ((png (make-temp-file "pdf-view-test" nil ".png"))
+        (pdf-view-clipboard-program '("sh" "-c" "cat > /dev/null; sleep 5 &"))
+        (start (float-time)))
+    (unwind-protect
+        (progn
+          (pdf-view--copy-image-file png)
+          (should (< (- (float-time) start) 2.0)))
+      (delete-file png))))
