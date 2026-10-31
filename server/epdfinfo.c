@@ -1977,20 +1977,73 @@ annotation_ink_translate (PopplerAnnotInk *a, double dx, double dy)
 #if CAIRO_HAS_PNG_FUNCTIONS
 
 /* Load the PNG image in FILENAME as a cairo surface, or return NULL
-   and set ERROR_MSG. */
-static cairo_surface_t *
-xcairo_image_surface_from_png (const char *filename, char **error_msg)
-{
-  cairo_surface_t *surface = cairo_image_surface_create_from_png (filename);
-  cairo_status_t status = cairo_surface_status (surface);
+   and set ERROR_MSG.
 
+   The pixels of the returned surface are *PIXELS, which must be freed
+   with g_free () once poppler has copied them; it is NULL when the
+   image was not copied, see below.
+
+   poppler's get_raw_data_from_cairo_image () steps a pointer four
+   bytes along before it reads the alpha byte of a pixel, so on the
+   last pixel of the last row of an image it reads up to three bytes
+   past the end of the pixel data, which the address sanitizer reports
+   as a heap-buffer-overflow (seen in poppler 24.02 through at least
+   25.03, in glib/poppler-annot.cc).  A surface of our own, with four
+   spare bytes after the pixels, keeps that read inside an allocation
+   and leaves the image and the way poppler turns it into an XObject
+   untouched. */
+static cairo_surface_t *
+xcairo_image_surface_from_png (const char *filename, unsigned char **pixels,
+                               char **error_msg)
+{
+  cairo_surface_t *png = cairo_image_surface_create_from_png (filename);
+  cairo_status_t status = cairo_surface_status (png);
+  cairo_surface_t *surface;
+  cairo_format_t format;
+  cairo_t *cr;
+  int width, height, stride;
+
+  *pixels = NULL;
   if (status != CAIRO_STATUS_SUCCESS)
     {
       if (error_msg)
         *error_msg = g_strdup_printf
           ("Cannot read a PNG image from `%s': %s",
            filename, cairo_status_to_string (status));
+      cairo_surface_destroy (png);
+      return NULL;
+    }
+
+  /* Leave any other kind of image to poppler, which has a better
+     error message for it than we would have here. */
+  format = cairo_image_surface_get_format (png);
+  if (format != CAIRO_FORMAT_ARGB32 && format != CAIRO_FORMAT_RGB24)
+    return png;
+
+  width = cairo_image_surface_get_width (png);
+  height = cairo_image_surface_get_height (png);
+  stride = cairo_format_stride_for_width (format, width);
+  /* The four spare bytes, see above. */
+  *pixels = g_malloc0 ((size_t) stride * (size_t) height + 4);
+  surface = cairo_image_surface_create_for_data (*pixels, format,
+                                                 width, height, stride);
+  cr = cairo_create (surface);
+  cairo_set_operator (cr, CAIRO_OPERATOR_SOURCE);
+  cairo_set_source_surface (cr, png, 0, 0);
+  cairo_paint (cr);
+  cairo_surface_destroy (png);
+
+  status = cairo_status (cr);
+  cairo_destroy (cr);
+  if (status != CAIRO_STATUS_SUCCESS)
+    {
+      if (error_msg)
+        *error_msg = g_strdup_printf
+          ("Cannot copy the PNG image from `%s': %s",
+           filename, cairo_status_to_string (status));
       cairo_surface_destroy (surface);
+      g_free (*pixels);
+      *pixels = NULL;
       return NULL;
     }
   return surface;
@@ -2002,7 +2055,9 @@ static gboolean
 annotation_stamp_set_image (PopplerAnnotStamp *a, const char *filename,
                             char **error_msg)
 {
+  unsigned char *pixels;
   cairo_surface_t *surface = xcairo_image_surface_from_png (filename,
+                                                            &pixels,
                                                             error_msg);
   GError *gerror = NULL;
   gboolean ok;
@@ -2011,6 +2066,8 @@ annotation_stamp_set_image (PopplerAnnotStamp *a, const char *filename,
     return FALSE;
   ok = poppler_annot_stamp_set_custom_image (a, surface, &gerror);
   cairo_surface_destroy (surface);
+  /* poppler copied the pixels by now. */
+  g_free (pixels);
   if (! ok)
     {
       if (error_msg)
@@ -2101,11 +2158,13 @@ annotation_new (const epdfinfo_t *ctx, document_t *doc, PopplerPage *page,
              image is set once the annotation is on the page, see
              cmd_addannot; check now that it can be read. */
 #if CAIRO_HAS_PNG_FUNCTIONS
+          unsigned char *pixels;
           cairo_surface_t *surface =
-            xcairo_image_surface_from_png (name + 6, error_msg);
+            xcairo_image_surface_from_png (name + 6, &pixels, error_msg);
           if (! surface)
             goto error;
           cairo_surface_destroy (surface);
+          g_free (pixels);
 #else
           cerror_if_not (0, error_msg, "%s",
                          "This epdfinfo cannot read PNG images");
