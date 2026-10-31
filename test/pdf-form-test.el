@@ -130,6 +130,63 @@
                    '("name" "notes" "secret" "agree" "color" "size"
                      "fruit" "pet" "tags" "zip" "Reset" "size")))))
 
+(defun pdf-form-test-widget-annots (page)
+  "Return the widget annotations of PAGE."
+  (cl-remove-if-not (lambda (a) (eq (pdf-annot-get a 'type) 'widget))
+                    (pdf-annot-getannots page)))
+
+(ert-deftest pdf-form-widget-annotation-is-a-field ()
+  "A widget annotation is the visible part of a form field.
+
+`pdf-annot' must leave its hotspot to `pdf-form', and activating
+the annotation must edit the field instead of its comment."
+  (pdf-test-with-pdf "forms.pdf"
+    (let ((annots (pdf-form-test-widget-annots 1)))
+      (should annots)
+      ;; Every widget annotation is drawn where its field is.
+      (dolist (a annots)
+        (should (pdf-form--field-at-edges (pdf-annot-get a 'page)
+                                          (pdf-annot-get a 'edges))))
+      ;; The annotation hotspots leave the widgets alone...
+      (let ((spots (pdf-annot-hotspot-function 1 '(1000 . 1000))))
+        (dolist (a annots)
+          (should-not (memq (pdf-annot-get-id a) (mapcar #'cadr spots)))))
+      ;; ...while every field you can use gets a hotspot of its own.
+      (let ((spots (mapcar #'cadr
+                           (pdf-form-hotspots-function 1 '(1000 . 1000)))))
+        (dolist (field (pdf-form--actionable-fields 1))
+          (should (memq (intern (format "form-field-%d"
+                                        (alist-get 'id field)))
+                        spots))))
+      ;; Activating a widget edits its field and handles the click.
+      (let* ((widget (cl-find-if
+                      (lambda (a)
+                        (equal "name"
+                               (alist-get 'name
+                                          (pdf-form--field-at-edges
+                                           (pdf-annot-get a 'page)
+                                           (pdf-annot-get a 'edges)))))
+                      annots))
+             edited)
+        (should widget)
+        (cl-letf (((symbol-function 'pdf-form-edit-field)
+                   (lambda (f) (setq edited (alist-get 'name f)))))
+          (should (pdf-form-activate-widget widget)))
+        (should (equal edited "name"))))))
+
+(ert-deftest pdf-form-mode-activates-widgets ()
+  "The mode takes the widget activation handler and leaves no trace."
+  (pdf-test-with-pdf "forms.pdf"
+    (pdf-form-minor-mode 1)
+    (should (memq 'pdf-form-activate-widget
+                  pdf-annot-activate-handler-functions))
+    (pdf-form-minor-mode -1)
+    (should-not (memq 'pdf-form-activate-widget
+                      pdf-annot-activate-handler-functions))
+    (pdf-form-minor-mode 1)
+    (should (memq 'pdf-form-activate-widget
+                  pdf-annot-activate-handler-functions))))
+
 (defun pdf-form-test-image-data (image)
   "Return the data of the IMAGE created by `pdf-view-create-page'."
   (plist-get (cdr image) :data))
@@ -492,6 +549,18 @@ The database has the password PASSWORD, if it is non-nil."
       (let ((signed (pdf-form-test-field "approval-signed")))
         (should (equal (alist-get 'edges signed) (alist-get 'edges field)))
         (should (= 2 (length (pdf-form--signatures-at signed)))))
+      ;; The empty field is labelled as the field under the signature.
+      (let ((fields (pdf-form-fields '(1) #'pdf-form-signature-p)))
+        (should (equal (mapcar #'pdf-form--signature-heading fields)
+                       '("approval (page 1, empty, under approval-signed)\n"
+                         "approval-signed (page 1)\n")))
+        (pdf-form-describe-signatures fields)
+        (with-current-buffer "*PDF Signatures*"
+          (should (string-match-p
+                   (regexp-quote "approval (page 1, empty, under approval-signed)")
+                   (buffer-string)))
+          (should (string-match-p (regexp-quote "approval-signed (page 1)")
+                                  (buffer-string)))))
       (should-not (pdf-form-unsigned-fields)))))
 
 (ert-deftest pdf-form-sign-password ()
@@ -552,8 +621,11 @@ The database has the password PASSWORD, if it is non-nil."
     (with-current-buffer "*PDF Signatures*"
       (should (string-match-p "approval-signed (page 1)\n  Signature: +valid"
                               (buffer-string)))
-      (should (string-match-p "approval (page 1)\n  Signature: +unsigned"
-                              (buffer-string))))))
+      (should (string-match-p
+               (concat (regexp-quote
+                        "approval (page 1, empty, under approval-signed)")
+                       "\n  Signature: +unsigned")
+               (buffer-string))))))
 
 (defmacro pdf-form-test-with-image-signing (fixture &rest body)
   "Run BODY visiting a copy of FIXTURE, ready for image signing."
@@ -565,9 +637,9 @@ The database has the password PASSWORD, if it is non-nil."
                                        '(11 8)))))
      (let* ((pdf-form-test-dir (make-temp-file "pdf-form-test" t))
             (file (expand-file-name ,fixture pdf-form-test-dir))
-            (pdf-pages--undo-alist nil)
+            (pdf-undo--alist nil)
             (pdf-pages-confirm nil)
-            (pdf-pages-backup-directory
+            (pdf-undo-backup-directory
              (expand-file-name "backups" pdf-form-test-dir)))
        (copy-file ,fixture file)
        (unwind-protect
@@ -597,6 +669,6 @@ The database has the password PASSWORD, if it is non-nil."
           (should (search-forward "/Subtype /Image" nil t))
           (should-not (search-forward "/Subtype /Stamp" nil t)))
         ;; Undo restores the version with the unflattened stamp.
-        (pdf-pages-undo)
+        (pdf-undo)
         (should (cl-some (lambda (a) (eq (alist-get 'type a) 'stamp))
                          (pdf-info-getannots nil)))))))
