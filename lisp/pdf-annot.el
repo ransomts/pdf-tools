@@ -257,11 +257,16 @@ Line annotations can not be moved this way."
   "Complete list of annotation types.")
 
 (defcustom pdf-annot-list-listed-types
-  (if (pdf-info-markup-annotations-p)
-      (list 'text 'file 'squiggly 'highlight 'underline 'strike-out
-            'square 'circle 'line 'stamp 'free-text 'ink)
-    (list 'text 'file))
-  "A list of annotation types displayed in the list buffer."
+  (list 'text 'file 'squiggly 'highlight 'underline 'strike-out
+        'square 'circle 'line 'stamp 'free-text 'ink)
+  "A list of annotation types displayed in the list buffer.
+
+Markup annotations are not listed where the epdfinfo server cannot
+handle them; see `pdf-annot--listed-types'.  That is checked when
+the list is filled, not here: the default of a `defcustom' is
+evaluated when this library is loaded, and asking the server then
+would make `pdf-annot' unloadable wherever no server is running,
+such as while byte-compiling it."
   :type `(set ,@(mapcar (lambda (type)
                           (list 'const type))
                         pdf-annot-annotation-types)))
@@ -360,28 +365,43 @@ Setting this after the package was loaded has no effect."
     (define-key kmap pdf-annot-minor-mode-map-prefix smap)
     (define-key smap "l" #'pdf-annot-list-annotations)
     (define-key smap "a" #'pdf-annot-attachment-dired)
-    (when (pdf-info-writable-annotations-p)
-      (define-key smap "D" #'pdf-annot-delete)
-      (define-key smap "M" #'pdf-annot-adjust)
-      (define-key smap "t" #'pdf-annot-add-text-annotation)
-      (when (pdf-info-markup-annotations-p)
-        (define-key smap "m" #'pdf-annot-add-markup-annotation)
-        (define-key smap "s" #'pdf-annot-add-squiggly-markup-annotation)
-        (define-key smap "u" #'pdf-annot-add-underline-markup-annotation)
-        (define-key smap "o" #'pdf-annot-add-strikeout-markup-annotation)
-        (define-key smap "h" #'pdf-annot-add-highlight-markup-annotation)
-        (when (pdf-info-shape-annotations-p)
-          (define-key smap "r" #'pdf-annot-add-square-annotation)
-          (define-key smap "c" #'pdf-annot-add-circle-annotation)
-          (define-key smap "L" #'pdf-annot-add-line-annotation))
-        (when (pdf-info-stamp-annotations-p)
-          (define-key smap "S" #'pdf-annot-add-stamp-annotation))
-        (when (pdf-info-free-text-annotations-p)
-          (define-key smap "f" #'pdf-annot-add-free-text-annotation))
-        (when (pdf-info-ink-annotations-p)
-          (define-key smap "i" #'pdf-annot-add-ink-annotation))))
     kmap)
-  "Keymap used for `pdf-annot-minor-mode'.")
+  "Keymap used for `pdf-annot-minor-mode'.
+
+It holds the commands that work without the epdfinfo server; the
+ones that need it are bound by `pdf-annot--bind-server-keys' when
+the mode is turned on, see there.")
+
+(defun pdf-annot--bind-server-keys ()
+  "Bind in `pdf-annot-minor-mode-map' what the server can do.
+The map is made when this library is loaded, and there need not be
+a server to ask about its features then -- while byte-compiling,
+for instance, or in a session that has not opened a PDF yet -- so
+the keys that depend on them are bound when the mode is turned on
+in a PDF buffer, where asking is cheap and meaningful."
+  (let ((smap (lookup-key pdf-annot-minor-mode-map
+                          pdf-annot-minor-mode-map-prefix)))
+    (when (keymapp smap)
+      (when (pdf-info-writable-annotations-p)
+        (define-key smap "D" #'pdf-annot-delete)
+        (define-key smap "M" #'pdf-annot-adjust)
+        (define-key smap "t" #'pdf-annot-add-text-annotation)
+        (when (pdf-info-markup-annotations-p)
+          (define-key smap "m" #'pdf-annot-add-markup-annotation)
+          (define-key smap "s" #'pdf-annot-add-squiggly-markup-annotation)
+          (define-key smap "u" #'pdf-annot-add-underline-markup-annotation)
+          (define-key smap "o" #'pdf-annot-add-strikeout-markup-annotation)
+          (define-key smap "h" #'pdf-annot-add-highlight-markup-annotation)
+          (when (pdf-info-shape-annotations-p)
+            (define-key smap "r" #'pdf-annot-add-square-annotation)
+            (define-key smap "c" #'pdf-annot-add-circle-annotation)
+            (define-key smap "L" #'pdf-annot-add-line-annotation))
+          (when (pdf-info-stamp-annotations-p)
+            (define-key smap "S" #'pdf-annot-add-stamp-annotation))
+          (when (pdf-info-free-text-annotations-p)
+            (define-key smap "f" #'pdf-annot-add-free-text-annotation))
+          (when (pdf-info-ink-annotations-p)
+            (define-key smap "i" #'pdf-annot-add-ink-annotation)))))))
 
 (defvar savehist-minibuffer-history-variables)
 
@@ -393,6 +413,7 @@ Setting this after the package was loaded has no effect."
   :group 'pdf-annot
   (cond
    (pdf-annot-minor-mode
+    (pdf-annot--bind-server-keys)
     (when pdf-annot-tweak-tooltips
       (when (boundp 'x-gtk-use-system-tooltips)
         (setq x-gtk-use-system-tooltips nil))
@@ -2611,12 +2632,31 @@ belong to the same page and A1 is displayed above/left of A2."
                      (and (= e1-top e2-top)
                           (<= e1-left e2-left)))))))))
 
+(defconst pdf-annot--markup-dependent-types
+  '(squiggly highlight underline strike-out square circle line
+    stamp free-text ink)
+  "Annotation types the server needs markup support for.")
+
+(defun pdf-annot--listed-types ()
+  "Return the annotation types the list buffer should show.
+
+This is `pdf-annot-list-listed-types', less the types the server
+cannot handle: poppler without markup annotations can neither
+create nor edit them, so listing them would only offer editing
+that fails.  The rest of the list is left alone, so customizing it
+still works with an old server."
+  (if (pdf-info-markup-annotations-p)
+      pdf-annot-list-listed-types
+    (seq-remove (lambda (type)
+                  (memq type pdf-annot--markup-dependent-types))
+                pdf-annot-list-listed-types)))
+
 (defun pdf-annot-list-entries ()
   "Return all the annotations of this PDF buffer as a `tabulated-list'."
   (unless (buffer-live-p pdf-annot-list-document-buffer)
     (error "No PDF document associated with this buffer"))
   (mapcar #'pdf-annot-list-create-entry
-          (sort (pdf-annot-getannots nil pdf-annot-list-listed-types
+          (sort (pdf-annot-getannots nil (pdf-annot--listed-types)
                                      pdf-annot-list-document-buffer)
                 #'pdf-annot-compare-annotations)))
 
