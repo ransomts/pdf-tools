@@ -45,6 +45,14 @@
 ;;   `pdf-form-backup-directory', and
 ;; - reverts the buffer.
 ;;
+;; M-x pdf-form-certificates shows the certificates of the NSS
+;; database with their expiry, marks the expired ones in red, and
+;; lets you sign with one, make one the default, import a PKCS#12
+;; file, create a self-signed certificate or delete one.  The
+;; commands run the NSS tools certutil and pk12util; without them,
+;; the store can still be used for signing, but not managed from
+;; Emacs.
+;;
 ;; From Lisp, `pdf-form-values' returns the values of a form and
 ;; `pdf-form-fill' fills one in, both by field name.
 
@@ -110,6 +118,29 @@ copies are kept there and outlive the Emacs session."
   :group 'pdf-form
   :type '(choice (const :tag "Temporary, deleted on exit" nil)
                  directory))
+
+(defcustom pdf-form-default-certificate nil
+  "The certificate to sign with by default.
+
+The value is the id, the nickname, of one of the certificates from
+`pdf-info-signingcertificates'.  `pdf-form-read-certificate' puts it
+first and offers it as the default answer, and
+`pdf-form-certificates' marks it with a star; there, \\[pdf-form-certificate-set-default]
+makes the certificate at point the default one.
+
+It is not saved for the next Emacs session; set it in your init file
+to keep it."
+  :group 'pdf-form
+  :type '(choice (const :tag "None" nil)
+                 (string :tag "Certificate id")))
+
+(defcustom pdf-form-certificate-warning-days 30
+  "How many days before a certificate expires to warn about it.
+
+`pdf-form-certificates' shows a certificate that expires within this
+many days, but has not expired yet, in its State column."
+  :group 'pdf-form
+  :type 'integer)
 
 
 ;; * ================================================================== *
@@ -812,13 +843,13 @@ annotations); save them before signing? " (buffer-name)))
                 (buffer-name)
                 (substitute-command-keys "\\[revert-buffer]"))))
 
-(defun pdf-form--signing-certificates ()
+(defun pdf-form--signing-certificates (&optional password)
   "Return the signing certificates and the NSS password they needed.
 
 The result is a cons (CERTIFICATES . PASSWORD), see
-`pdf-info-signingcertificates'.  Read the password, if the NSS
-database has one."
-  (let (password certificates (tries 0))
+`pdf-info-signingcertificates'.  If the NSS database has a password,
+use PASSWORD, or read it from the user with three tries."
+  (let (certificates (tries 0))
     (while (null certificates)
       (condition-case err
           (setq certificates (list (pdf-info-signingcertificates password)))
@@ -836,6 +867,19 @@ database has one."
             (t (signal (car err) (cdr err))))))))
     (cons (car certificates) password)))
 
+(defun pdf-form--certificate-time (expires)
+  "Return the time the ISO 8601 string EXPIRES denotes, or nil."
+  (and (stringp expires)
+       (ignore-errors (date-to-time expires))))
+
+(defun pdf-form--certificate-expired-p (expires &optional now)
+  "Return non-nil if the certificate expiring at EXPIRES has expired.
+
+EXPIRES is the ISO 8601 string of `pdf-info-signingcertificates';
+NOW is the time to compare it with, `current-time' by default."
+  (let ((time (pdf-form--certificate-time expires)))
+    (and time (not (time-less-p (or now (current-time)) time)))))
+
 (defun pdf-form--certificate-to-string (certificate)
   "Return a string describing CERTIFICATE for the user."
   (let-alist certificate
@@ -848,16 +892,27 @@ database has one."
             (and .expires (format ", expires %s"
                                   (substring (pdf-form-format-time .expires)
                                              0 (min 10 (length .expires)))))
+            (and (pdf-form--certificate-expired-p .expires) ", expired")
             ")")))
 
 (defun pdf-form-read-certificate (certificates)
-  "Let the user choose one of the signing CERTIFICATES."
+  "Let the user choose one of the signing CERTIFICATES.
+
+Put `pdf-form-default-certificate' first, if it is one of them, and
+offer it as the default answer."
   (unless certificates
     (user-error "There are no signing certificates in the NSS database %s"
                 (if pdf-info-nss-directory
                     (abbreviate-file-name pdf-info-nss-directory)
                   "(poppler's default, see `pdf-info-nss-directory')")))
-  (let* ((choices (mapcar (lambda (c)
+  (let* ((preferred (and pdf-form-default-certificate
+                         (cl-find pdf-form-default-certificate certificates
+                                  :key (lambda (c) (alist-get 'id c))
+                                  :test #'equal)))
+         (certificates (if preferred
+                           (cons preferred (cl-remove preferred certificates))
+                         certificates))
+         (choices (mapcar (lambda (c)
                             (cons (pdf-form--certificate-to-string c) c))
                           certificates))
          (default (caar choices)))
@@ -999,7 +1054,7 @@ Return the backup's name."
       (pdf-view-goto-page page))
     backup))
 
-(defun pdf-form-sign (place &optional certificate reason location)
+(defun pdf-form-sign (place &optional certificate reason location password)
   "Sign the document at PLACE with CERTIFICATE.
 
 PLACE is an empty signature field or a cons (PAGE . EDGES) of a
@@ -1012,7 +1067,8 @@ with the signature on top of it.
 CERTIFICATE is the id of one of `pdf-info-signingcertificates'.
 If it is nil, read it from the user, as well as REASON and
 LOCATION, which are optional.  Read the password of the NSS
-database `pdf-info-nss-directory', if it has one.
+database `pdf-info-nss-directory', if it has one; PASSWORD is that
+password, if it is already known.
 
 Unsaved changes have to be saved first, since the signature covers
 the file on disk.  The signed document replaces the visited file
@@ -1027,8 +1083,8 @@ in `pdf-form-backup-directory'."
          (field (and (pdf-form-signature-p place) place))
          (page (if field (alist-get 'page field) (car place)))
          (edges (if field (alist-get 'edges field) (cdr place)))
-         (certs+password (pdf-form--signing-certificates))
-         (password (cdr certs+password))
+         (certs+password (pdf-form--signing-certificates password))
+         (nss-password (cdr certs+password))
          (cert (if certificate
                    (or (cl-find certificate (car certs+password)
                                 :key (lambda (c) (alist-get 'id c))
@@ -1058,7 +1114,7 @@ in `pdf-form-backup-directory'."
                          reason location
                          (pdf-form-signature-text cert reason location)
                          (or (alist-get 'subject cert) (alist-get 'id cert))
-                         password)
+                         nss-password)
           (unless (> (or (file-attribute-size (file-attributes temp)) 0) 0)
             (error "Signing produced no file; `%s' unchanged"
                    (abbreviate-file-name file)))
@@ -1147,6 +1203,515 @@ for `pdf-pages-undo'"
 (requires poppler-glib >= 23.07)"))
   (pdf-form--assert-file)
   (pdf-form--assert-saved))
+
+
+;; * ================================================================== *
+;; * Certificate store
+;; * ================================================================== *
+
+(defvar-local pdf-form--certificates nil
+  "The certificates shown in the current certificate list buffer.")
+
+(defvar-local pdf-form--certificates-password nil
+  "The NSS password the current certificate list was made with.")
+
+(defvar-local pdf-form--certificates-source nil
+  "The PDF buffer the current certificate list was opened from, if any.")
+
+(defun pdf-form--certificate-program (program)
+  "Return the full name of PROGRAM, or signal an error if it is missing.
+
+The NSS certificate store cannot be managed from Emacs without the
+NSS command line tools, so say which one is missing."
+  (or (executable-find program)
+      (user-error "`%s' is not installed; the NSS certificate store cannot \
+be managed from Emacs without it" program)))
+
+(defun pdf-form--certificate-store ()
+  "Return the NSS database to manage, as certutil's `-d' argument.
+
+`pdf-info-nss-directory' says which database poppler signs with.
+When it is nil, poppler leaves the choice to NSS, and NSS's
+softoken default is ~/.pki/nssdb, so that is the database to
+manage here; a bare directory name would make certutil guess."
+  (concat "sql:" (expand-file-name (or pdf-info-nss-directory "~/.pki/nssdb"))))
+
+(defun pdf-form--certificate-months (days)
+  "Return how many months certutil's `-v' needs to last DAYS days.
+
+certutil counts the validity of a certificate in months, not days,
+so a day count is rounded to the nearest month, at least one."
+  (max 1 (round (/ (float days) 30))))
+
+(defun pdf-form--certificate-command (action &rest args)
+  "Return the program and arguments for ACTION on the certificate store.
+
+ACTION is `list', `create', `delete' or `import'.  ARGS is a plist
+with the keys `:nickname', `:subject', `:days', `:file',
+`:file-password-file', `:password-file' and `:noise-file'.  The
+result is a list (PROGRAM ARGUMENT...), ready for `call-process'.
+
+`:password-file' holds the NSS database's password, for certutil's
+`-f' and pk12util's `-k'; `:file-password-file' holds the PKCS#12
+file's password, for pk12util's `-w'.  Both are files, never
+strings on the command line, so that the passwords are not visible
+in the process list."
+  (let ((nickname (plist-get args :nickname))
+        (subject (plist-get args :subject))
+        (days (plist-get args :days))
+        (file (plist-get args :file))
+        (file-password-file (plist-get args :file-password-file))
+        (password-file (plist-get args :password-file))
+        (noise-file (plist-get args :noise-file))
+        (store (pdf-form--certificate-store)))
+    (cl-case action
+      (list
+       (append (list "certutil" "-L" "-d" store)
+               (and password-file (list "-f" password-file))))
+      (create
+       (append (list "certutil" "-S" "-x" "-n" nickname "-s" subject
+                     "-t" "u,u,u" "-d" store)
+               (and password-file (list "-f" password-file))
+               (list "-g" "2048" "-Z" "SHA256"
+                     "--keyUsage" "digitalSignature,nonRepudiation"
+                     "-v" (number-to-string (pdf-form--certificate-months days)))
+               (and noise-file (list "-z" noise-file))))
+      (delete
+       (append (list "certutil" "-D" "-n" nickname "-d" store)
+               (and password-file (list "-f" password-file))))
+      (import
+       (append (list "pk12util" "-i" file "-d" store)
+               (and file-password-file (list "-w" file-password-file))
+               (and password-file (list "-k" password-file))))
+      (t (error "Unknown certificate action `%s'" action)))))
+
+(defun pdf-form--write-password-file (password)
+  "Write PASSWORD to a temporary file that only its owner can read.
+
+The NSS tools take the database password from a file, so it has to
+be on disk for a moment; the caller deletes the file afterwards."
+  (let ((file (make-temp-file "pdf-form-nss-" nil ".pw")))
+    (write-region (concat password "\n") nil file nil 'silent)
+    (set-file-modes file #o600)
+    file))
+
+(defun pdf-form--certificate-noise-file ()
+  "Return a temporary file of random bytes for certutil's `-z' option.
+
+certutil wants entropy from the keyboard when it generates a key,
+which a program cannot provide, so give it a file instead."
+  (let ((file (make-temp-file "pdf-form-noise-")))
+    (with-temp-buffer
+      (set-buffer-multibyte nil)
+      (dotimes (_ 4096)
+        (insert-byte (random 256) 1))
+      (write-region (point-min) (point-max) file nil 'silent))
+    file))
+
+(defun pdf-form--program-output-tail (output &optional lines)
+  "Return the last LINES lines of OUTPUT, for an error message."
+  (let ((all (split-string (string-trim output) "\n")))
+    (string-join (last all (or lines 5)) "\n")))
+
+(defun pdf-form--certificate-run (action args)
+  "Run ACTION from `pdf-form--certificate-command' with ARGS.
+
+If the NSS database has a password, read it, write it to a
+temporary file only you can read and run the command again; the
+file is deleted afterwards.  Signal an error with the tail of the
+program's output if the command fails."
+  (let ((password-file (plist-get args :password-file))
+        (tries 0)
+        done output)
+    (unwind-protect
+        (progn
+          (while (not done)
+            (let* ((command (apply #'pdf-form--certificate-command action args))
+                   (program (pdf-form--certificate-program (car command))))
+              (with-temp-buffer
+                (let ((status (apply #'call-process program nil t nil
+                                     (cdr command))))
+                  (setq output (buffer-string))
+                  (cond
+                   ((eq status 0)
+                    (setq done t))
+                   ((and (< tries 3)
+                         (let ((case-fold-search t))
+                           (string-match-p "password\\|authenticate" output)))
+                    (cl-incf tries)
+                    (when (and password-file (file-exists-p password-file))
+                      (delete-file password-file))
+                    (setq password-file
+                          (pdf-form--write-password-file
+                           (read-passwd
+                            (if (= tries 1)
+                                "Password of the NSS certificate database: "
+                              "Wrong password, try again: "))))
+                    (setq args (plist-put (copy-sequence args)
+                                          :password-file password-file)))
+                   (t
+                    (error "`%s' failed: %s" program
+                           (pdf-form--program-output-tail output))))))))
+          output)
+      (when (and password-file (file-exists-p password-file))
+        (delete-file password-file)))))
+
+(defun pdf-form--certificate-nicknames (&optional output)
+  "Return the nicknames of the certificates in the NSS store.
+
+OUTPUT is the output of `certutil -L'; run it if it is nil.  Take
+the first column of each line as the nickname, splitting at runs of
+two spaces, so that nicknames with single spaces survive."
+  (let ((output (or output (pdf-form--certificate-run 'list nil)))
+        names)
+    (dolist (line (split-string output "\n"))
+      (let ((line (string-trim line)))
+        (unless (or (string-empty-p line)
+                    (string-prefix-p "Certificate Nickname" line)
+                    (string-prefix-p "SSL,S/MIME" line))
+          (let ((name (string-trim (car (split-string line "  +")))))
+            (unless (string-empty-p name)
+              (push name names))))))
+    (nreverse names)))
+
+(defun pdf-form--read-certificate-nickname (prompt)
+  "Read a certificate nickname with PROMPT, completing over the store's.
+
+Fall back to a plain `read-string' when `certutil -L' lists nothing,
+for example because the database has no certificates yet."
+  (let ((names (pdf-form--certificate-nicknames)))
+    (if names
+        (completing-read prompt names nil t)
+      (read-string prompt))))
+
+(defun pdf-form--certificate-state (certificate &optional now)
+  "Return a string describing whether CERTIFICATE has expired.
+
+The string is \"expired\", \"expires today\", \"expires in N days\"
+or \"valid\".  NOW is the time to compare the expiry with,
+`current-time' by default."
+  (let ((time (pdf-form--certificate-time (alist-get 'expires certificate))))
+    (if (null time)
+        "unknown"
+      (let* ((now (or now (current-time)))
+             (seconds (float-time (time-subtract time now)))
+             (days (floor seconds (* 24 60 60))))
+        (cond ((not (time-less-p now time)) "expired")
+              ((< seconds (* 24 60 60)) "expires today")
+              ((<= days pdf-form-certificate-warning-days)
+               (format "expires in %d days" days))
+              (t "valid"))))))
+
+(defun pdf-form--certificate-at-point ()
+  "Return the id of the certificate on the current line."
+  (or (tabulated-list-get-id)
+      (user-error "There is no certificate on this line")))
+
+(defun pdf-form--certificates-set-entries (certificates)
+  "Show CERTIFICATES in the current certificate list buffer.
+
+Set the columns and entries of the `tabulated-list-mode' buffer and
+sort the certificates by expiry, the expired ones first, which is
+the ones the user has to see.  Leave out the Issuer column when no
+certificate was issued by somebody else, as self-signed ones are."
+  (let* ((issuer-column
+          (seq-some (lambda (c)
+                      (let ((subject (alist-get 'subject c))
+                            (issuer (alist-get 'issuer c)))
+                        (and subject issuer (not (equal subject issuer)))))
+                    certificates))
+         (now (current-time))
+         (rows
+          (mapcar
+           (lambda (certificate)
+             (let-alist certificate
+               (let* ((time (pdf-form--certificate-time .expires))
+                      (state (pdf-form--certificate-state certificate now))
+                      (expired (pdf-form--certificate-expired-p .expires now))
+                      (warning (and (not expired)
+                                    (string-prefix-p "expires" state)
+                                    'warning))
+                      (face (cond (expired 'error) (warning 'warning)))
+                      (subject (or .subject .id "?"))
+                      (text (lambda (string)
+                              (if face (propertize string 'face face) string))))
+                 (list time (or .id subject)
+                       (vconcat
+                        (list (funcall text subject))
+                        (when issuer-column
+                          (list (if (equal .issuer .subject)
+                                    ""
+                                  (funcall text (or .issuer "")))))
+                        (list (funcall text
+                                       (if time
+                                           (format-time-string "%Y-%m-%d" time)
+                                         (or .expires ""))))
+                        (list (funcall text state))
+                        (list (if (equal .id pdf-form-default-certificate)
+                                  "*" "")))))))
+           certificates)))
+    (setq tabulated-list-format
+          (vconcat (list '("Subject" 30 t))
+                   (and issuer-column (list '("Issuer" 30 t)))
+                   '(("Expires" 12 t) ("State" 18 t) ("Default" 7 t))))
+    (setq tabulated-list-entries
+          (mapcar #'cdr
+                  (sort rows
+                        (lambda (a b)
+                          (let ((time-a (car a))
+                                (time-b (car b)))
+                            (cond ((and time-a time-b)
+                                   (time-less-p time-a time-b))
+                                  (time-a t)
+                                  (time-b nil)
+                                  (t (string< (cadr a) (cadr b)))))))))))
+
+(defun pdf-form--certificates-goto-first ()
+  "Put point on the first certificate line of the list."
+  (goto-char (point-min))
+  ;; The header is an overlay before point-min, but a list without
+  ;; entries has no line with an id at all.
+  (while (and (not (tabulated-list-get-id)) (not (eobp)))
+    (forward-line 1)))
+
+(defun pdf-form--certificates-print (certificates)
+  "Print CERTIFICATES in the current certificate list buffer.
+
+Put point on the first certificate, which is the one that needs
+attention soonest."
+  (pdf-form--certificates-set-entries certificates)
+  (tabulated-list-init-header)
+  (tabulated-list-print t)
+  (pdf-form--certificates-goto-first))
+
+(defun pdf-form--certificates-read ()
+  "Read the certificates into the current certificate list buffer.
+
+Use the password the list was made with, if there was one, and set
+the buffer's entries without printing them; this is the
+`tabulated-list-revert-hook'."
+  (let ((certs+password
+         (pdf-form--signing-certificates pdf-form--certificates-password)))
+    (setq pdf-form--certificates-password (cdr certs+password))
+    (setq pdf-form--certificates (car certs+password))
+    (pdf-form--certificates-set-entries pdf-form--certificates)))
+
+(defun pdf-form--certificates-refresh ()
+  "Update the certificate list buffer, if it exists."
+  (let ((buffer (get-buffer "*PDF Certificates*")))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (pdf-form--certificates-read)
+        (tabulated-list-init-header)
+        (tabulated-list-print t)
+        (pdf-form--certificates-goto-first)))))
+
+(defvar pdf-form-certificates-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map tabulated-list-mode-map)
+    (define-key map (kbd "RET") #'pdf-form-certificate-sign)
+    (define-key map (kbd "s") #'pdf-form-certificate-sign)
+    (define-key map (kbd "d") #'pdf-form-certificate-set-default)
+    (define-key map (kbd "i") #'pdf-form-certificate-import)
+    (define-key map (kbd "n") #'pdf-form-certificate-create)
+    (define-key map (kbd "x") #'pdf-form-certificate-delete)
+    (define-key map (kbd "g") #'pdf-form-certificate-refresh)
+    (define-key map (kbd "q") #'pdf-form-certificates-quit)
+    map))
+
+(define-derived-mode pdf-form-certificates-mode tabulated-list-mode
+  "PDF Certificates"
+  "Major mode for managing the NSS certificate store.
+
+Show the certificates with their expiry and let the user sign with
+one, make one the default, import a PKCS#12 file, create a
+self-signed certificate or delete one.
+
+\\{pdf-form-certificates-mode-map}"
+  (setq tabulated-list-padding 2)
+  (add-hook 'tabulated-list-revert-hook #'pdf-form--certificates-read nil t))
+
+(defun pdf-form-certificates (&optional source)
+  "List the certificates of the NSS database and let you manage them.
+
+The list shows each certificate's subject and issuer, when it
+expires, whether it has expired and which one is the default for
+signing.  Expired certificates come first and are marked in red.
+
+\\[pdf-form-certificate-sign] signs a document with the certificate
+at point, \\[pdf-form-certificate-set-default] makes it the default
+for signing, \\[pdf-form-certificate-import] imports a PKCS#12
+file, \\[pdf-form-certificate-create] creates a self-signed
+certificate, \\[pdf-form-certificate-delete] deletes one,
+\\[pdf-form-certificate-refresh] refreshes the list and
+\\[pdf-form-certificates-quit] buries it.
+
+SOURCE is the buffer of the PDF document signing starts from;
+interactively it is the current buffer, if it visits a PDF
+document.  Without one, the list still manages the certificates,
+but cannot sign."
+  (interactive (list (and (derived-mode-p 'pdf-view-mode) (current-buffer))))
+  (let ((certs+password (pdf-form--signing-certificates))
+        (buffer (get-buffer-create "*PDF Certificates*")))
+    (with-current-buffer buffer
+      (pdf-form-certificates-mode)
+      (setq pdf-form--certificates-source
+            (or source pdf-form--certificates-source))
+      (setq pdf-form--certificates-password (cdr certs+password))
+      (setq pdf-form--certificates (car certs+password))
+      (setq header-line-format
+            (and pdf-form--certificates-source
+                 (format "Signing `%s'"
+                         (buffer-name pdf-form--certificates-source))))
+      (pdf-form--certificates-print pdf-form--certificates))
+    (pop-to-buffer buffer)))
+
+(defun pdf-form-certificate-sign ()
+  "Sign the document the certificate list was opened from.
+
+Use the certificate at point and the NSS password the list was made
+with, so it is not asked for again, and sign where
+`pdf-form-sign' offers: an empty signature field or a rectangle of
+the page."
+  (interactive)
+  (let ((certificate (pdf-form--certificate-at-point))
+        (source pdf-form--certificates-source)
+        (password pdf-form--certificates-password))
+    (unless (buffer-live-p source)
+      (user-error "This list was not opened from a PDF document; use `%s' \
+in the document instead" (substitute-command-keys "\\[pdf-form-sign]")))
+    (with-current-buffer source
+      (pdf-form--prepare-signing))
+    (unless (eq (selected-window) (get-buffer-window source))
+      (select-window (or (get-buffer-window source)
+                         (display-buffer source))))
+    (with-current-buffer source
+      (pdf-form-sign (pdf-form--read-signature-place)
+                     certificate nil nil password))))
+
+(defun pdf-form-certificate-set-default ()
+  "Make the certificate at point the default for signing.
+
+`pdf-form-default-certificate' is the first choice and the default
+answer of `pdf-form-read-certificate'.  It is not saved for the
+next Emacs session; set it in your init file to keep it."
+  (interactive)
+  (let ((id (pdf-form--certificate-at-point)))
+    (setq pdf-form-default-certificate id)
+    (pdf-form--certificates-print pdf-form--certificates)
+    (message "`%s' is now the default signing certificate" id)))
+
+(defun pdf-form-certificate-import (file &optional password)
+  "Import the PKCS#12 FILE into the NSS certificate store.
+
+PASSWORD is the password of FILE; read it from the user if it is
+nil.  Read the password of the NSS database, if it has one, and
+refresh the list of certificates afterwards."
+  (interactive
+   (list (read-file-name "PKCS#12 file to import: ")
+         (read-passwd "Password of the PKCS#12 file: ")))
+  (unless (file-readable-p file)
+    (user-error "`%s' is not a readable file" (abbreviate-file-name file)))
+  (let ((file (expand-file-name file))
+        (password (or password
+                      (read-passwd "Password of the PKCS#12 file: "))))
+    (let ((password-file (pdf-form--write-password-file password)))
+      (unwind-protect
+          (progn
+            (pdf-form--certificate-run
+             'import (list :file file :file-password-file password-file))
+            (message "Imported `%s'" (abbreviate-file-name file)))
+        (when (file-exists-p password-file)
+          (delete-file password-file))))
+    (pdf-form--certificates-refresh)))
+
+(defun pdf-form-certificate-create (nickname &optional common-name
+                                             organization email days)
+  "Create a self-signed certificate NICKNAME in the NSS store.
+
+COMMON-NAME defaults to your full name, ORGANIZATION and EMAIL are
+optional parts of the subject, and DAYS is how long the
+certificate is valid, 365 by default.  Interactively, read all of
+them.
+
+A self-signed certificate is not trusted by anyone else: it proves
+the file has not changed since you signed it, not who you are.  It
+is still useful to sign documents that others only have to see
+unchanged, and it is the only certificate you can get without a
+certificate authority."
+  (interactive
+   (list (read-string "Certificate nickname: ")
+         (read-string (format "Common name (default %s): " (user-full-name))
+                      (user-full-name))
+         (read-string "Organization (optional): ")
+         (read-string "Email (optional): ")
+         (read-number "Days valid: " 365)))
+  (when (or (not (stringp nickname))
+            (string-empty-p (string-trim nickname)))
+    (user-error "A certificate needs a nickname"))
+  (setq nickname (string-trim nickname))
+  (when (or (not (stringp common-name))
+            (string-empty-p (string-trim common-name)))
+    (setq common-name (user-full-name)))
+  (unless (and (integerp days) (> days 0))
+    (user-error "The certificate must be valid for at least one day"))
+  (let* ((organization (and (stringp organization)
+                            (not (string-empty-p (string-trim organization)))
+                            (string-trim organization)))
+         (email (and (stringp email)
+                     (not (string-empty-p (string-trim email)))
+                     (string-trim email)))
+         (subject (string-join
+                   (delq nil (list (concat "CN=" (string-trim common-name))
+                                   (and organization (concat "O=" organization))
+                                   (and email (concat "E=" email))))
+                   ","))
+         (noise (pdf-form--certificate-noise-file)))
+    (unwind-protect
+        (progn
+          (pdf-form--certificate-run
+           'create (list :nickname nickname :subject subject :days days
+                         :noise-file noise))
+          (message "Created self-signed certificate `%s'.  It is not trusted \
+by anyone else: it proves that the file has not changed since you signed it, \
+not who you are" nickname)
+          (pdf-form--certificates-refresh))
+      (when (file-exists-p noise)
+        (delete-file noise)))))
+
+(defun pdf-form-certificate-delete (nickname)
+  "Delete the certificate NICKNAME from the NSS store.
+
+Ask for confirmation first.  Refuse to delete the default
+certificate, `pdf-form-default-certificate', and say so: make
+another one the default with `pdf-form-certificate-set-default'
+first, since signing would otherwise have no default."
+  (interactive
+   (list (if (derived-mode-p 'pdf-form-certificates-mode)
+             (pdf-form--certificate-at-point)
+           (pdf-form--read-certificate-nickname "Delete certificate: "))))
+  (when (equal nickname pdf-form-default-certificate)
+    (user-error "`%s' is the default certificate; make another one the \
+default first, with `%s'" nickname
+                (substitute-command-keys "\\[pdf-form-certificate-set-default]")))
+  (unless (y-or-n-p (format "Delete the certificate `%s'? " nickname))
+    (user-error "Not deleting `%s'" nickname))
+  (pdf-form--certificate-run 'delete (list :nickname nickname))
+  (message "Deleted certificate `%s'" nickname)
+  (pdf-form--certificates-refresh))
+
+(defun pdf-form-certificate-refresh ()
+  "Refresh the list of certificates from the NSS database."
+  (interactive)
+  (unless (derived-mode-p 'pdf-form-certificates-mode)
+    (user-error "This is not a certificate list"))
+  (revert-buffer))
+
+(defun pdf-form-certificates-quit ()
+  "Bury the certificate list, leaving the document it came from."
+  (interactive)
+  (bury-buffer))
+
 
 (provide 'pdf-form)
 
