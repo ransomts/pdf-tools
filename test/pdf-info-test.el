@@ -344,6 +344,145 @@
           (pdf-info-close tempfile)
           (delete-file tempfile))))))
 
+(ert-deftest pdf-info-creatable-annotation-types-free-text-ink ()
+  (skip-unless (pdf-info-markup-annotations-p))
+  (let ((types (pdf-info-creatable-annotation-types)))
+    (should (eq (and (memq 'free-text types) t)
+                (pdf-info-free-text-annotations-p)))
+    (should (eq (and (memq 'ink types) t)
+                (pdf-info-ink-annotations-p)))))
+
+(ert-deftest pdf-info-addannot-free-text-unsupported ()
+  (skip-unless (and (pdf-info-writable-annotations-p)
+                    (not (pdf-info-free-text-annotations-p))))
+  (pdf-test-with-test-pdf
+    (should-error (pdf-info-addannot 1 '(0.1 0.1 0.5 0.2) 'free-text))))
+
+(ert-deftest pdf-info-addannot-ink-unsupported ()
+  (skip-unless (and (pdf-info-writable-annotations-p)
+                    (not (pdf-info-ink-annotations-p))))
+  (pdf-test-with-test-pdf
+    (should-error (pdf-info-addannot 1 '(0 0 1 1) 'ink nil nil
+                                     '(0.1 0.1 0.2 0.2)))))
+
+(ert-deftest pdf-info-addannot-free-text ()
+  (skip-unless (pdf-info-free-text-annotations-p))
+  (pdf-test-with-test-pdf
+    (let* ((edges '(0.1 0.1 0.5 0.2))
+           (a (pdf-info-addannot 1 edges 'free-text))
+           (id (cdr (assq 'id a))))
+      (should (eq 'free-text (cdr (assq 'type a))))
+      (should (pdf-info-test--edges-equal edges (cdr (assq 'edges a))))
+      ;; The defaults: black Helvetica on a transparent background.
+      (should (equal "Helvetica" (cdr (assq 'font-name a))))
+      (should (= 12 (cdr (assq 'font-size a))))
+      (should (equal "#000000" (cdr (assq 'font-color a))))
+      (should (null (cdr (assq 'color a))))
+      (setq a (pdf-info-editannot id '((contents . "Hello, wörld")
+                                       (font-size . 20)
+                                       (font-color . "#ff0000")
+                                       (color . "#ffff00"))))
+      (should (equal "Hello, wörld" (cdr (assq 'contents a))))
+      (should (= 20 (cdr (assq 'font-size a))))
+      (should (equal "#ff0000" (cdr (assq 'font-color a))))
+      (should (equal "#ffff00" (cdr (assq 'color a))))
+      ;; Changing the text keeps the font.
+      (setq a (pdf-info-editannot id '((contents . "Hello again"))))
+      (should (= 20 (cdr (assq 'font-size a))))
+      (should (equal "Helvetica" (cdr (assq 'font-name a))))
+      (setq a (pdf-info-editannot id '((font-name . "Times"))))
+      (should (equal "Times" (cdr (assq 'font-name a))))
+      (should (= 20 (cdr (assq 'font-size a))))
+      (pdf-info-mvannot id '(0.2 0.3 -1 -1))
+      (should (pdf-info-test--edges-equal
+               '(0.2 0.3 0.6 0.4)
+               (cdr (assq 'edges (pdf-info-getannot id)))))
+      (should-error (pdf-info-editannot id '((font-size . 0))))
+      (should-error (pdf-info-editannot id '((font-name . ""))))
+      (should-error (pdf-info-editannot id '((icon . "Note")))))
+    (let ((id (cdr (assq 'id (pdf-info-addannot 1 '(0 0 0.1 0.1) 'text)))))
+      (should-error (pdf-info-editannot id '((font-size . 10))))
+      (should-error (pdf-info-editannot id '((font-color . "#ff0000")))))
+    (should-error (pdf-info-addannot 1 '(0 0 1 1) 'free-text nil nil
+                                     "Text"))))
+
+(ert-deftest pdf-info-addannot-ink ()
+  (skip-unless (pdf-info-ink-annotations-p))
+  (pdf-test-with-test-pdf
+    (let* ((a (pdf-info-addannot 1 '(0 0 1 1) 'ink nil nil
+                                 "2" '(0.25 0.5 0.5 0.25 0.75 0.5)
+                                 '(0.25 0.75)))
+           (id (cdr (assq 'id a)))
+           (edges (cdr (assq 'edges a))))
+      (should (eq 'ink (cdr (assq 'type a))))
+      ;; The strokes, a dot included, plus the line width determine
+      ;; the edges.
+      (should (pdf-test-relative-edges-p edges))
+      (should (< 0.24 (nth 0 edges) 0.25))
+      (should (< 0.24 (nth 1 edges) 0.25))
+      (should (< 0.75 (nth 2 edges) 0.76))
+      (should (< 0.75 (nth 3 edges) 0.76))
+      (should (equal "#0000ff"
+                     (cdr (assq 'color (pdf-info-editannot
+                                        id '((color . "#0000ff")))))))
+      ;; Moving the strokes keeps their size.
+      (pdf-info-mvannot id '(0.1 0.2 -1 -1))
+      (let ((moved (cdr (assq 'edges (pdf-info-getannot id)))))
+        (should (pdf-info-test--edges-equal
+                 (list 0.1 0.2
+                       (+ 0.1 (- (nth 2 edges) (nth 0 edges)))
+                       (+ 0.2 (- (nth 3 edges) (nth 1 edges))))
+                 moved))))
+    ;; Without a width.
+    (should (pdf-info-addannot 1 '(0 0 1 1) 'ink nil nil '(0.1 0.1 0.2 0.2)))
+    (should-error (pdf-info-addannot 1 '(0 0 1 1) 'ink))
+    (should-error (pdf-info-addannot 1 '(0 0 1 1) 'ink nil nil "2"))
+    (should-error (pdf-info-addannot 1 '(0 0 1 1) 'ink nil nil "0"
+                                     '(0.1 0.1 0.2 0.2)))
+    (should-error (pdf-info-addannot 1 '(0 0 1 1) 'ink nil nil
+                                     '(0.1 0.1 0.2)))
+    (should-error (pdf-info-addannot 1 '(0 0 1 1) 'ink nil nil
+                                     '(0.1 1.5)))))
+
+(ert-deftest pdf-info-save-free-text-ink-annotations ()
+  (skip-unless (and (pdf-info-free-text-annotations-p)
+                    (pdf-info-ink-annotations-p)))
+  (pdf-test-with-test-pdf
+    (dolist (id (mapcar (lambda (a)
+                          (cdr (assq 'id a)))
+                        (pdf-info-getannots)))
+      (pdf-info-delannot id))
+    (let ((text (pdf-info-addannot 1 '(0.1 0.1 0.5 0.2) 'free-text))
+          (ink (pdf-info-addannot 1 '(0 0 1 1) 'ink nil nil
+                                  "3" '(0.1 0.5 0.3 0.6)))
+          tempfile)
+      (pdf-info-editannot (cdr (assq 'id text))
+                          '((contents . "Saved text") (font-size . 16)
+                            (font-color . "#0000ff")))
+      (pdf-info-editannot (cdr (assq 'id ink)) '((color . "#ff0000")))
+      (unwind-protect
+          (let (annots)
+            (setq tempfile (pdf-info-save))
+            (setq annots (pdf-info-getannots nil tempfile))
+            (should (equal '(free-text ink)
+                           (sort (mapcar (lambda (a) (cdr (assq 'type a)))
+                                         annots)
+                                 #'string-lessp)))
+            (let ((text (cl-find 'free-text annots
+                                 :key (lambda (a) (cdr (assq 'type a)))))
+                  (ink (cl-find 'ink annots
+                                :key (lambda (a) (cdr (assq 'type a))))))
+              (should (equal "Saved text" (cdr (assq 'contents text))))
+              (should (= 16 (cdr (assq 'font-size text))))
+              (should (equal "#0000ff" (cdr (assq 'font-color text))))
+              (should (pdf-info-test--edges-equal '(0.1 0.1 0.5 0.2)
+                                                  (cdr (assq 'edges text))))
+              (should (equal "#ff0000" (cdr (assq 'color ink))))
+              (should (< 0.09 (nth 0 (cdr (assq 'edges ink))) 0.1))))
+        (when (and tempfile (file-exists-p tempfile))
+          (pdf-info-close tempfile)
+          (delete-file tempfile))))))
+
 (ert-deftest pdf-info-check-epdfinfo ()
   (should (progn (pdf-info-check-epdfinfo) t))
   (should-error

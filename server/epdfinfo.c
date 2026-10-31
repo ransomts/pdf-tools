@@ -1753,6 +1753,212 @@ annotation_line_parse_points (const epdfinfo_t *ctx, PopplerPage *page,
 }
 #endif
 
+#ifdef HAVE_POPPLER_ANNOT_FREE_TEXT
+/* The font of a new free text annotation, until it is changed with
+   the font-name and font-size properties. */
+#define FREE_TEXT_ANNOT_FONT_NAME "Helvetica"
+#define FREE_TEXT_ANNOT_FONT_SIZE 12.0
+
+/**
+ * Change the font of a free text annotation.
+ *
+ * This also makes sure, that the font has glyphs for all characters
+ * of the annotation's contents, so it should be called again after
+ * the contents changed.
+ *
+ * @param a The free text annotation.
+ * @param name The new font family, or NULL to keep the current one.
+ * @param size The new size in points, or a value <= 0 to keep the
+ *             current one.
+ */
+static void
+annotation_free_text_set_font (PopplerAnnotFreeText *a, const char *name,
+                               double size)
+{
+  PopplerFontDescription *font = poppler_annot_free_text_get_font_desc (a);
+
+  if (! font)
+    {
+      font = poppler_font_description_new (FREE_TEXT_ANNOT_FONT_NAME);
+      font->size_pt = FREE_TEXT_ANNOT_FONT_SIZE;
+    }
+  if (name)
+    {
+      g_free (font->font_name);
+      font->font_name = g_strdup (name);
+    }
+  if (size > 0)
+    font->size_pt = size;
+  poppler_annot_free_text_set_font_desc (a, font);
+  poppler_font_description_free (font);
+}
+#endif
+
+#ifdef HAVE_POPPLER_ANNOT_INK
+/**
+ * Parse the relative points of an ink annotation's stroke.
+ *
+ * @param ctx The epdfinfo context.
+ * @param page The page of the annotation.
+ * @param arg The points as a relative "X1 Y1 X2 Y2 ..." string.  A
+ *            single point is drawn as a dot.
+ * @param error_msg[out] An error message, if this fails.
+ *
+ * @return The stroke as a path in PDF coordinates, or NULL if arg
+ *         is invalid.
+ */
+static PopplerPath *
+annotation_ink_parse_path (const epdfinfo_t *ctx, PopplerPage *page,
+                           const char *arg, char **error_msg)
+{
+  GArray *points = g_array_new (FALSE, FALSE, sizeof (PopplerPoint));
+  double width, height;
+  const char *s = arg;
+  gsize n;
+
+  poppler_page_get_size (page, &width, &height);
+  while (TRUE)
+    {
+      PopplerPoint p;
+      double x, y;
+      char *end;
+
+      while (g_ascii_isspace (*s))
+        ++s;
+      if (! *s)
+        break;
+      x = g_ascii_strtod (s, &end);
+      cerror_if_not (end != s, error_msg, "Invalid ink path: %s", arg);
+      s = end;
+      y = g_ascii_strtod (s, &end);
+      cerror_if_not (end != s, error_msg, "Invalid ink path: %s", arg);
+      s = end;
+      cerror_if_not (x >= 0 && x <= 1 && y >= 0 && y <= 1, error_msg,
+                     "Ink path is not relative: %s", arg);
+      p.x = x * width;
+      p.y = height - y * height;
+      g_array_append_val (points, p);
+    }
+  cerror_if_not (points->len > 0, error_msg, "%s", "Empty ink path");
+  if (points->len == 1)
+    {
+      /* Draw a dot as a short line, a line of length 0 is not
+         drawn at all. */
+      PopplerPoint p = g_array_index (points, PopplerPoint, 0);
+      p.x = p.x + 1 <= width ? p.x + 1 : p.x - 1;
+      g_array_append_val (points, p);
+    }
+  n = points->len;
+  return poppler_path_new_from_array ((PopplerPoint *)
+                                      g_array_free (points, FALSE), n);
+ error:
+  g_array_free (points, TRUE);
+  return NULL;
+}
+
+/**
+ * Return TRUE if arg is a single number, i.e. the line width of an
+ * ink annotation rather than a stroke.
+ */
+static gboolean
+annotation_ink_width_arg_p (const char *arg, double *width)
+{
+  char *end;
+
+  *width = g_ascii_strtod (arg, &end);
+  if (end == arg)
+    return FALSE;
+  while (g_ascii_isspace (*end))
+    ++end;
+  return ! *end;
+}
+
+/**
+ * Set the strokes of an ink annotation.
+ *
+ * The annotation must already be on page, see
+ * poppler_annot_ink_set_ink_list.  This also sets its rectangle to
+ * the bounding box of the strokes.
+ *
+ * @param ctx The epdfinfo context.
+ * @param page The page of the annotation.
+ * @param a The ink annotation.
+ * @param args The strokes as relative "X1 Y1 X2 Y2 ..." strings,
+ *             optionally preceded by the line width in points.
+ * @param nargs The number of args.
+ * @param error_msg[out] An error message, if this fails.
+ *
+ * @return TRUE, if all strokes were valid.  Otherwise the annotation
+ *         is not changed.
+ */
+static gboolean
+annotation_ink_set_paths (const epdfinfo_t *ctx, PopplerPage *page,
+                          PopplerAnnotInk *a, char * const *args,
+                          int nargs, char **error_msg)
+{
+  GPtrArray *paths = g_ptr_array_new_with_free_func
+    ((GDestroyNotify) poppler_path_free);
+  gboolean ok = FALSE;
+  double width = 0;
+  int i = 0;
+
+  if (nargs > 0 && annotation_ink_width_arg_p (args[0], &width))
+    {
+      cerror_if_not (width > 0, error_msg, "Invalid line width: %s", args[0]);
+      ++i;
+    }
+  for (; i < nargs; ++i)
+    {
+      PopplerPath *path = annotation_ink_parse_path (ctx, page, args[i],
+                                                     error_msg);
+      if (! path)
+        goto error;
+      g_ptr_array_add (paths, path);
+    }
+  cerror_if_not (paths->len > 0, error_msg, "%s",
+                 "Unable to create empty ink annotation");
+  /* The ink list's rectangle depends on the width, so set it first. */
+  if (width > 0)
+    poppler_annot_set_border_width (POPPLER_ANNOT (a), width);
+  poppler_annot_ink_set_ink_list (a, (PopplerPath **) paths->pdata,
+                                  paths->len);
+  ok = TRUE;
+ error:
+  g_ptr_array_unref (paths);
+  return ok;
+}
+
+/**
+ * Move the strokes of an ink annotation.
+ *
+ * @param a The ink annotation.
+ * @param dx The horizontal offset in PDF points.
+ * @param dy The vertical offset in PDF points.
+ */
+static void
+annotation_ink_translate (PopplerAnnotInk *a, double dx, double dy)
+{
+  gsize npaths, i;
+  PopplerPath **paths = poppler_annot_ink_get_ink_list (a, &npaths);
+
+  for (i = 0; i < npaths; ++i)
+    {
+      gsize npoints, j;
+      PopplerPoint *points = poppler_path_get_points (paths[i], &npoints);
+
+      for (j = 0; j < npoints; ++j)
+        {
+          points[j].x += dx;
+          points[j].y += dy;
+        }
+    }
+  poppler_annot_ink_set_ink_list (a, paths, npaths);
+  for (i = 0; i < npaths; ++i)
+    poppler_path_free (paths[i]);
+  g_free (paths);
+}
+#endif
+
 /**
  * Create a new annotation.
  *
@@ -1841,6 +2047,52 @@ annotation_new (const epdfinfo_t *ctx, document_t *doc, PopplerPage *page,
       if (icon != POPPLER_ANNOT_STAMP_ICON_UNKNOWN)
         poppler_annot_stamp_set_icon (POPPLER_ANNOT_STAMP (a), icon);
       return a;
+    }
+#endif
+
+#ifdef HAVE_POPPLER_ANNOT_FREE_TEXT
+  if (! strcmp (type, "free-text"))
+    {
+      PopplerColor black = {0, 0, 0};
+
+      cerror_if_not (nargs == 0, error_msg, "%s", "Too many arguments");
+      a = poppler_annot_free_text_new (doc->pdf, r);
+      /* poppler-glib leaves font and color undefined. */
+      annotation_free_text_set_font (POPPLER_ANNOT_FREE_TEXT (a), NULL, 0);
+      poppler_annot_free_text_set_font_color (POPPLER_ANNOT_FREE_TEXT (a),
+                                              &black);
+      /* Just the text, no frame around it. */
+      poppler_annot_set_border_width (a, 0);
+      return a;
+    }
+#endif
+
+#ifdef HAVE_POPPLER_ANNOT_INK
+  if (! strcmp (type, "ink"))
+    {
+      double width;
+      int i = 0;
+
+      /* The strokes can only be set once the annotation is on the
+         page, see cmd_addannot.  Check them now. */
+      if (nargs > 0 && annotation_ink_width_arg_p (rest->value.rest.args[0],
+                                                   &width))
+        {
+          cerror_if_not (width > 0, error_msg, "Invalid line width: %s",
+                         rest->value.rest.args[0]);
+          ++i;
+        }
+      cerror_if_not (i < nargs, error_msg, "%s",
+                     "Unable to create empty ink annotation");
+      for (; i < nargs; ++i)
+        {
+          PopplerPath *path = annotation_ink_parse_path
+            (ctx, page, rest->value.rest.args[i], error_msg);
+          if (! path)
+            goto error;
+          poppler_path_free (path);
+        }
+      return poppler_annot_ink_new (doc->pdf, r);
     }
 #endif
 
@@ -1996,6 +2248,28 @@ annotation_edit_validate (const epdfinfo_t *ctx, const command_arg_t *rest,
           cerror_if_not (POPPLER_IS_ANNOT_LINE (annotation), error_msg,
                          error_fmt, key, "line");
           atype = ARG_EDGES;
+        }
+#endif
+#ifdef HAVE_POPPLER_ANNOT_FREE_TEXT
+      else if (! strcmp (key, "font-name"))
+        {
+          cerror_if_not (POPPLER_IS_ANNOT_FREE_TEXT (annotation), error_msg,
+                         error_fmt, key, "free text");
+          atype = ARG_NONEMPTY_STRING;
+        }
+      else if (! strcmp (key, "font-size"))
+        {
+          cerror_if_not (POPPLER_IS_ANNOT_FREE_TEXT (annotation), error_msg,
+                         error_fmt, key, "free text");
+          cerror_if_not (strtod (args[i], NULL) > 0, error_msg,
+                         "Expected a positive font size: %s", args[i]);
+          atype = ARG_DOUBLE;
+        }
+      else if (! strcmp (key, "font-color"))
+        {
+          cerror_if_not (POPPLER_IS_ANNOT_FREE_TEXT (annotation), error_msg,
+                         error_fmt, key, "free text");
+          atype = ARG_COLOR;
         }
 #endif
       else if (! strcmp (key, "is-open"))
@@ -2207,6 +2481,35 @@ annotation_print (const annotation_t *annot, /* const */ PopplerPage *page)
       /* <<< Square and Circle Annotation <<< */
     }
 #endif
+#ifdef HAVE_POPPLER_ANNOT_FREE_TEXT
+  else if (POPPLER_IS_ANNOT_FREE_TEXT (a))
+    {
+      /* >>> Free Text Annotation >>> */
+      PopplerAnnotFreeText *fa = POPPLER_ANNOT_FREE_TEXT (a);
+      PopplerFontDescription *font = poppler_annot_free_text_get_font_desc (fa);
+
+      putchar (':');
+      /* Font Name and Size */
+      if (font)
+        {
+          print_response_string (font->font_name, COLON);
+          printf ("%f:", font->size_pt);
+          poppler_font_description_free (font);
+        }
+      else
+        printf ("::");
+      /* Font Color */
+      color = poppler_annot_free_text_get_font_color (fa);
+      if (color)
+        {
+          printf ("#%.2x%.2x%.2x", (color->red >> 8)
+                  , (color->green >> 8)
+                  , (color->blue >> 8));
+          g_free (color);
+        }
+      /* <<< Free Text Annotation <<< */
+    }
+#endif
   putchar ('\n');
  theend:
 #ifdef HAVE_POPPLER_ANNOT_MARKUP
@@ -2313,6 +2616,16 @@ cmd_features (const epdfinfo_t *ctx, const command_arg_t *args)
     "stamp-annotations",
 #else
     "no-stamp-annotations",
+#endif
+#ifdef HAVE_POPPLER_ANNOT_FREE_TEXT
+    "free-text-annotations",
+#else
+    "no-free-text-annotations",
+#endif
+#ifdef HAVE_POPPLER_ANNOT_INK
+    "ink-annotations",
+#else
+    "no-ink-annotations",
 #endif
 #ifdef HAVE_POPPLER_SIGNING
     "signing",
@@ -3962,11 +4275,15 @@ cmd_pagesize(const epdfinfo_t *ctx, const command_arg_t *args)
 
    interior-color
 
-   for square and circle annotations and
+   for square and circle annotations,
 
    stamp-icon
 
-   for stamp annotations.
+   for stamp annotations and
+
+   font-name font-size font-color
+
+   for free text annotations.
 
    Errors: If page is out of range.
 */
@@ -4136,7 +4453,12 @@ cmd_getattachments (const epdfinfo_t *ctx, const command_arg_t *args)
    text, square, circle: none,
    line: optionally the relative start and end point "X1 Y1 X2 Y2"
    (default: from the top-left to the bottom-right corner of edges),
-   stamp: optionally a standard icon name, e.g. Approved.
+   stamp: optionally a standard icon name, e.g. Approved,
+   free-text: none; set its text with editannot's contents and its
+   font with font-name, font-size and font-color,
+   ink: optionally the line width in points, followed by one or more
+   strokes, each a list of relative points "X1 Y1 X2 Y2 ...".  The
+   strokes determine the edges.
 
    Errors: If the type is not supported or the arguments are invalid.
 */
@@ -4208,6 +4530,20 @@ cmd_addannot (const epdfinfo_t *ctx, const command_arg_t *args)
     g_list_prepend (annotations, a);
   g_hash_table_insert (doc->annotations.keys, key, a);
   poppler_page_add_annot (page, pa);
+#ifdef HAVE_POPPLER_ANNOT_INK
+  if (POPPLER_IS_ANNOT_INK (pa))
+    {
+      /* The strokes need the page and determine the rectangle.  They
+         were checked by annotation_new. */
+      perror_if_not (annotation_ink_set_paths
+                     (ctx, page, POPPLER_ANNOT_INK (pa),
+                      args[5].value.rest.args, args[5].value.rest.nargs,
+                      &error_msg),
+                     "Creating annotation failed: %s",
+                     error_msg ? error_msg : "Reason unknown");
+      poppler_annot_get_rectangle (pa, &amap->area);
+    }
+#endif
   OK_BEGIN ();
   annotation_print (a, page);
   OK_END ();
@@ -4309,6 +4645,12 @@ cmd_editannot (const epdfinfo_t *ctx, const command_arg_t *args)
                                                  ARG_STRING, NULL),
                          unexpected_parse_error, rest_args[i]);
           poppler_annot_set_contents (pa, carg.value.string);
+#ifdef HAVE_POPPLER_ANNOT_FREE_TEXT
+          /* Make sure the font has glyphs for the new text. */
+          if (POPPLER_IS_ANNOT_FREE_TEXT (pa))
+            annotation_free_text_set_font (POPPLER_ANNOT_FREE_TEXT (pa),
+                                           NULL, 0);
+#endif
         }
       else if (! strcmp (key, "edges"))
         {
@@ -4336,7 +4678,22 @@ cmd_editannot (const epdfinfo_t *ctx, const command_arg_t *args)
           area->x1 = r.x1 * width;
           area->y2 = height - (r.y1 * height);
 
-          poppler_annot_set_rectangle (pa, area);
+#ifdef HAVE_POPPLER_ANNOT_INK
+          if (POPPLER_IS_ANNOT_INK (pa))
+            {
+              /* Move the strokes, which determine the rectangle;
+                 their size stays the same. */
+              PopplerRectangle old;
+
+              poppler_annot_get_rectangle (pa, &old);
+              annotation_ink_translate (POPPLER_ANNOT_INK (pa),
+                                        area->x1 - old.x1,
+                                        area->y2 - old.y2);
+              poppler_annot_get_rectangle (pa, area);
+            }
+          else
+#endif
+            poppler_annot_set_rectangle (pa, area);
         }
       else if (! strcmp (key, "label"))
         {
@@ -4419,6 +4776,32 @@ cmd_editannot (const epdfinfo_t *ctx, const command_arg_t *args)
           poppler_annot_line_set_vertices (POPPLER_ANNOT_LINE (pa),
                                            &start, &end);
           poppler_annot_set_rectangle (pa, &a->amap->area);
+        }
+#endif
+#ifdef HAVE_POPPLER_ANNOT_FREE_TEXT
+      else if (! strcmp (key, "font-name"))
+        {
+          perror_if_not (command_arg_parse_arg  (ctx, rest_args[i], &carg,
+                                                 ARG_NONEMPTY_STRING, NULL),
+                         unexpected_parse_error, rest_args[i]);
+          annotation_free_text_set_font (POPPLER_ANNOT_FREE_TEXT (pa),
+                                         carg.value.string, 0);
+        }
+      else if (! strcmp (key, "font-size"))
+        {
+          perror_if_not (command_arg_parse_arg  (ctx, rest_args[i], &carg,
+                                                 ARG_DOUBLE, NULL),
+                         unexpected_parse_error, rest_args[i]);
+          annotation_free_text_set_font (POPPLER_ANNOT_FREE_TEXT (pa),
+                                         NULL, carg.value.scalar);
+        }
+      else if (! strcmp (key, "font-color"))
+        {
+          perror_if_not (command_arg_parse_arg  (ctx, rest_args[i], &carg,
+                                                 ARG_COLOR, NULL),
+                         unexpected_parse_error, rest_args[i]);
+          poppler_annot_free_text_set_font_color (POPPLER_ANNOT_FREE_TEXT (pa),
+                                                  &carg.value.color);
         }
 #endif
       else if (! strcmp (key, "is-open"))
