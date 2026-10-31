@@ -81,12 +81,15 @@
 (require 'pdf-thumbs)
 (require 'cl-lib)
 (require 'subr-x)
+;; The whole library, not just the two functions used here: only
+;; `file-notify-handle-event' is autoloaded, so `file-notify-add-watch'
+;; and `file-notify-valid-p' are void until `filenotify' has been
+;; loaded, and in a batch Emacs nothing else loads it (Emacs 29
+;; preloads it; earlier versions do not).
+(require 'filenotify)
 
 (defvar pdf-view-roll-minor-mode)
 (declare-function pdf-view-roll-minor-mode "pdf-roll")
-(declare-function file-notify-add-watch "filenotify")
-(declare-function file-notify-rm-watch "filenotify")
-(declare-function file-notify-valid-p "filenotify")
 
 ;;; Code:
 
