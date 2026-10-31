@@ -35,6 +35,7 @@
 (require 'cl-macs)
 
 (declare-function cua-copy-region "cua-base")
+(declare-function pdf-undo "pdf-undo")
 (declare-function pdf-tools-pdf-buffer-p "pdf-tools")
 (declare-function image-size "image.c")
 
@@ -386,6 +387,9 @@ double click (`word') or a triple click (`line')."
     ;; Reconvert
     (define-key map (kbd "C-c C-c")   'doc-view-mode)
     (define-key map (kbd "g")         'revert-buffer)
+    ;; Undo.  The buffer's own undo is disabled, see `pdf-view-mode'.
+    (define-key map (kbd "C-/")       #'pdf-undo)
+    (define-key map (kbd "C-_")       #'pdf-undo)
     ;; Region
     (define-key map [down-mouse-1] 'pdf-view-mouse-set-region)
     (define-key map [double-down-mouse-1] 'pdf-view-mouse-set-region)
@@ -505,7 +509,9 @@ PNG images in Emacs buffers."
   ;; Disable image rescaling.
   (when (boundp 'image-scaling-factor)
     (setq-local image-scaling-factor 1))
-  ;; No undo at the moment.
+  ;; The buffer's own undo is disabled: a change to a PDF is made in the
+  ;; epdfinfo server, not in the buffer, and `pdf-undo' restores whole
+  ;; versions of the file instead.
   (unless buffer-undo-list
     (buffer-disable-undo))
   ;; Enable transient-mark-mode, so region deactivation when quitting

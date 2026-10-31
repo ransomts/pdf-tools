@@ -92,6 +92,7 @@
 ;;; Code:
 
 (require 'pdf-view)
+(require 'pdf-undo)
 (require 'pdf-util)
 (require 'pdf-info)
 (require 'cus-edit)

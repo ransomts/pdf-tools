@@ -565,9 +565,9 @@ The database has the password PASSWORD, if it is non-nil."
                                        '(11 8)))))
      (let* ((pdf-form-test-dir (make-temp-file "pdf-form-test" t))
             (file (expand-file-name ,fixture pdf-form-test-dir))
-            (pdf-pages--undo-alist nil)
+            (pdf-undo--alist nil)
             (pdf-pages-confirm nil)
-            (pdf-pages-backup-directory
+            (pdf-undo-backup-directory
              (expand-file-name "backups" pdf-form-test-dir)))
        (copy-file ,fixture file)
        (unwind-protect
@@ -597,6 +597,6 @@ The database has the password PASSWORD, if it is non-nil."
           (should (search-forward "/Subtype /Image" nil t))
           (should-not (search-forward "/Subtype /Stamp" nil t)))
         ;; Undo restores the version with the unflattened stamp.
-        (pdf-pages-undo)
+        (pdf-undo)
         (should (cl-some (lambda (a) (eq (alist-get 'type a) 'stamp))
                          (pdf-info-getannots nil)))))))
