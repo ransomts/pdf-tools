@@ -196,12 +196,18 @@ key `C-c C-f' in this mode.
     (message "Filling in forms is not supported by this version of epdfinfo"))
    (pdf-form-minor-mode
     (pdf-view-add-hotspot-function 'pdf-form-hotspots-function 5)
+    ;; Widget annotations are form fields; activating one, e.g. from
+    ;; the annotation list, should edit the field, not its comment.
+    (add-hook 'pdf-annot-activate-handler-functions
+              #'pdf-form-activate-widget nil t)
     ;; Never removed when a buffer turns the mode off: the advice
     ;; applies to every buffer, while `pdf-form-minor-mode' below says
     ;; which ones mark their fields.
     (advice-add 'pdf-view-create-page :around #'pdf-form--create-page))
    (t
-    (pdf-view-remove-hotspot-function 'pdf-form-hotspots-function)))
+    (pdf-view-remove-hotspot-function 'pdf-form-hotspots-function)
+    (remove-hook 'pdf-annot-activate-handler-functions
+                 #'pdf-form-activate-widget t)))
   (pdf-view-redisplay t))
 
 (defun pdf-form-fillable-p (field)
@@ -487,6 +493,33 @@ offer to sign it if it is empty."
         ;; Remove the highlight, if the user quit.
         (unless done
           (pdf-view-redisplay-pages (alist-get 'page field))))))))
+
+(defun pdf-form--field-at-edges (page edges)
+  "Return the form field on PAGE drawn with the relative EDGES.
+
+Both the fields and the annotations of a form come from the same
+rectangles in the document, so the edges of a widget annotation
+are the edges of its field."
+  (cl-find-if (lambda (field)
+                (let ((e (alist-get 'edges field)))
+                  (and e (cl-every (lambda (a b) (< (abs (- a b)) 0.001))
+                                   edges e))))
+              (pdf-cache-formfields page)))
+
+(defun pdf-form-activate-widget (a)
+  "Fill in, sign or validate the form field that annotation A draws.
+
+Return non-nil if A is a widget annotation, so that
+`pdf-annot-activate-handler-functions' stops there: a widget has no
+contents of its own worth editing.  `pdf-form-minor-mode' puts this
+on that hook buffer-locally; clicking a field normally reaches
+`pdf-form-edit-field' directly through the field's own hotspot."
+  (when (eq (pdf-annot-get a 'type) 'widget)
+    (let ((field (pdf-form--field-at-edges (pdf-annot-get a 'page)
+                                           (pdf-annot-get a 'edges))))
+      (when field
+        (pdf-form-edit-field field)))
+    t))
 
 (defun pdf-form-set-field (field value)
   "Set FIELD to VALUE and redisplay its page.
@@ -1166,6 +1199,24 @@ listed in the buffer `*PDF form CSV*'."
   "Format the ISO 8601 string TIME for display."
   (replace-regexp-in-string "T" " " time))
 
+(defun pdf-form--signature-heading (field)
+  "Return the heading line of signature FIELD.
+
+Poppler can only add signature fields, so `pdf-form-sign' signs an
+empty field by putting a new field with the signature over it.  An
+empty field under a signed one is not a signature that failed, but
+the field the signature covers: say so."
+  (let ((cover (and (pdf-form-unsigned-p field)
+                    (cl-find-if
+                     (lambda (other) (not (pdf-form-unsigned-p other)))
+                     (cdr (pdf-form--signatures-at field))))))
+    (format "%s (page %d%s)\n"
+            (alist-get 'name field)
+            (alist-get 'page field)
+            (if cover
+                (format ", empty, under %s" (alist-get 'name cover))
+              ""))))
+
 (defun pdf-form-describe-signatures (fields)
   "Show whether the signatures of FIELDS are valid."
   (let ((buffer (current-buffer)))
@@ -1173,8 +1224,8 @@ listed in the buffer `*PDF form CSV*'."
       (dolist (f fields)
         (let-alist (with-current-buffer buffer
                      (pdf-info-validatesignature (alist-get 'id f)))
-          (princ (format "%s (page %d)\n" (alist-get 'name f)
-                         (alist-get 'page f)))
+          (princ (with-current-buffer buffer
+                   (pdf-form--signature-heading f)))
           (princ (format "  Signature:   %s\n"
                          (cl-case .signature-status
                            (valid "valid")
@@ -1580,7 +1631,7 @@ The signature is a stamp annotation showing IMAGE, a PNG file
 otherwise), that fills PLACE and keeps the aspect ratio of the
 image.  It is flattened into the page right away, so that the
 signed document looks the same in every PDF viewer; the previous
-version is kept for `pdf-pages-undo'.
+version is kept for `pdf-undo'.
 
 This is a signature in the everyday sense, a picture of your
 handwritten name, not a digital one: unlike `pdf-form-sign', it
@@ -1621,7 +1672,7 @@ epdfinfo (requires poppler-glib >= 22.07 and PNG support in cairo)"))
     (let (pdf-pages-confirm)
       (pdf-pages-flatten-annotations))
     (message "Signed `%s' with an image; the unsigned version is kept \
-for `pdf-pages-undo'"
+for `pdf-undo'"
              (file-name-nondirectory file))))
 
 (defun pdf-form--prepare-signing ()

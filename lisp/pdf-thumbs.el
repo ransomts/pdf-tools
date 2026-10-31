@@ -989,9 +989,9 @@ Display the new file.  See `pdf-pages-extract'."
     buffer))
 
 (defun pdf-thumbs-undo ()
-  "Undo the last page operation, see `pdf-pages-undo'."
+  "Undo the last change to the PDF file, see `pdf-undo'."
   (interactive)
-  (pdf-thumbs--in-pdf #'pdf-pages-undo))
+  (pdf-thumbs--in-pdf #'pdf-undo))
 
 
 
@@ -1062,7 +1062,7 @@ Display the new file.  See `pdf-pages-extract'."
     ["Move Page(s)..." pdf-thumbs-move]
     ["Rotate Page(s) Clockwise" pdf-thumbs-rotate]
     ["Rotate Page(s) Counterclockwise" pdf-thumbs-rotate-counterclockwise]
-    ["Undo Last Page Operation" pdf-thumbs-undo]
+    ["Undo Last Change" pdf-thumbs-undo]
     "--"
     ["Larger Thumbnails" pdf-thumbs-enlarge]
     ["Smaller Thumbnails" pdf-thumbs-shrink]
