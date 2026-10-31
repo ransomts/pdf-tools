@@ -348,6 +348,160 @@ error, and so would `create-image'."
         (should-error (pdf-form-fill bad))
         (should (equal (pdf-form-values) before))))))
 
+;; CSV tables.  A table of values is a way to fill in a form for many
+;; people at once, so the tests cover the format itself, the round trip
+;; through a file, and filling in a copy of the fixture per row.
+
+(ert-deftest pdf-form-csv-keys-do-not-shadow-other-modes ()
+  ;; `pdf-form-minor-mode' is looked up before `pdf-misc-minor-mode',
+  ;; so a plain key here would hide the one of the other mode in every
+  ;; document with form fields.  `I' is `pdf-misc-display-metadata'.
+  (should (eq 'pdf-form-export-csv
+              (lookup-key pdf-form-minor-mode-map (kbd "C-c C-f e"))))
+  (should (eq 'pdf-form-import-csv
+              (lookup-key pdf-form-minor-mode-map (kbd "C-c C-f i"))))
+  (should (eq 'pdf-form-import-csv-batch
+              (lookup-key pdf-form-minor-mode-map (kbd "C-c C-f b"))))
+  (should-not (lookup-key pdf-form-minor-mode-map (kbd "E")))
+  (should-not (lookup-key pdf-form-minor-mode-map (kbd "I"))))
+
+(ert-deftest pdf-form-csv-round-trip ()
+  (let ((rows '(("name" "value")
+                ("a,b" "c")
+                ("quote" "he said \"hi\"")
+                ("newline" "two\nlines")
+                ("empty" "")
+                ("spaced" "  padded  "))))
+    (should (equal (pdf-form--csv-parse
+                    (mapconcat #'pdf-form--csv-line rows "\n"))
+                   rows))
+    ;; A line break at the end does not start an empty row.
+    (should (equal (pdf-form--csv-parse "a,b\n") '(("a" "b"))))
+    (should-not (pdf-form--csv-parse ""))
+    ;; CRLF, and a double quote inside a quoted field is written twice.
+    (should (equal (pdf-form--csv-parse "a,\"b\"\"c\"\r\nd,e\r\n")
+                   '(("a" "b\"c") ("d" "e"))))
+    ;; A field is quoted only when it has to be.
+    (should (equal (pdf-form--csv-line '("a" "b")) "a,b"))
+    (should (equal (pdf-form--csv-line '("a,b")) "\"a,b\""))
+    (should (equal (pdf-form--csv-line '("a\"b")) "\"a\"\"b\""))
+    (should (equal (pdf-form--csv-line '("a\nb")) "\"a\nb\""))
+    (should (equal (pdf-form--csv-line '("")) ""))
+    ;; A space at either end survives the round trip.
+    (should (equal (pdf-form--csv-line '(" a")) "\" a\""))
+    (should (equal (pdf-form--csv-parse (pdf-form--csv-line '(" a ")))
+                   '((" a "))))))
+
+(ert-deftest pdf-form-csv-export-and-import ()
+  (let* ((dir (make-temp-file "pdf-form-csv" t))
+         (file (expand-file-name "values.csv" dir)))
+    (unwind-protect
+        (pdf-test-with-pdf "forms.pdf"
+          (let* ((original (pdf-form-values))
+                 (names (mapcar (lambda (group) (car group))
+                                (cl-remove-if-not
+                                 (lambda (group)
+                                   (pdf-form-fillable-p (cadr group)))
+                                 (pdf-form--named-fields)))))
+            (pdf-form-export-csv file)
+            (should (file-exists-p file))
+            (let* ((rows (pdf-form--csv-parse
+                          (with-temp-buffer
+                            (insert-file-contents file)
+                            (buffer-string))))
+                   (header (car rows))
+                   (cells (cadr rows)))
+              (should (= 2 (length rows)))
+              (should (equal (length header) (length cells)))
+              ;; The header names the fields you can fill in, in
+              ;; document order, and leaves the read-only one out.
+              (should (equal header names))
+              (should-not (member "fixed" header))
+              ;; The cells hold the values, read as text.
+              (dolist (name header)
+                (should (equal (nth (cl-position name header :test #'equal)
+                                    cells)
+                               (pdf-form--csv-cell
+                                (cadr (assoc name (pdf-form--named-fields)))
+                                (cdr (assoc name original))))))
+              ;; Change some values, then read the file back.
+              (pdf-form-fill '(("name" . "Ada") ("agree" . t)
+                               ("size" . 1) ("color" . "Blue")
+                               ("tags" . ("Red" "Blue")) ("zip" . "29634")))
+              (should-not (equal (pdf-form-values) original))
+              (pdf-form-import-csv file)
+              (let ((imported (pdf-form-values)))
+                ;; The file brings back the values it holds.  The
+                ;; `size' group had no button selected when it was
+                ;; written, and a viewer cannot clear a group, so it
+                ;; keeps the button this test chose.
+                (dolist (name header)
+                  (unless (equal name "size")
+                    (should (equal (cdr (assoc name imported))
+                                   (cdr (assoc name original))))))
+                (should (= 1 (cdr (assoc "size" imported))))))))
+      (delete-directory dir t))))
+
+(ert-deftest pdf-form-csv-import-unknown-field ()
+  (let ((file (make-temp-file "pdf-form-csv" nil ".csv")))
+    (unwind-protect
+        (pdf-test-with-pdf "forms.pdf"
+          (let ((before (pdf-form-values)))
+            ;; A name the form does not have.
+            (with-temp-file file
+              (insert "name,nope\nAda,x\n"))
+            (should-error (pdf-form-import-csv file) :type 'user-error)
+            (should (equal (pdf-form-values) before))
+            ;; A name it has but cannot fill in.
+            (with-temp-file file
+              (insert "name,fixed\nAda,x\n"))
+            (let ((err (should-error (pdf-form-import-csv file)
+                                     :type 'user-error)))
+              (should (string-match-p "fixed" (error-message-string err))))
+            (should (equal (pdf-form-values) before))))
+      (delete-file file))))
+
+(ert-deftest pdf-form-csv-batch ()
+  (let* ((dir (make-temp-file "pdf-form-csv" t))
+         (first (expand-file-name "first.pdf" dir))
+         (second (expand-file-name "second.pdf" dir))
+         (table (expand-file-name "roster.csv" dir)))
+    (unwind-protect
+        (progn
+          (copy-file "forms.pdf" first)
+          (copy-file "forms.pdf" second)
+          (with-temp-file table
+            (insert "File,name,agree\r\n"
+                    "first.pdf,Ada,true\r\n"
+                    "second.pdf,Bob,false\r\n"))
+          ;; The command runs in a PDF buffer, and asks first.
+          (pdf-test-with-pdf "forms.pdf"
+            (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+              (should (= 2 (pdf-form-import-csv-batch table)))))
+          (dolist (expected `((,first "Ada" t) (,second "Bob" nil)))
+            (pdf-test-with-pdf (car expected)
+              (let ((values (pdf-form-values)))
+                (should (equal (cdr (assoc "name" values)) (nth 1 expected)))
+                ;; The column of a checkbox is read as true or false.
+                (should (equal (and (cdr (assoc "agree" values)) t)
+                               (nth 2 expected))))))
+          ;; A row that fails does not stop the others.
+          (with-temp-file table
+            (insert "file,name\n"
+                    "first.pdf,Charles\n"
+                    "missing.pdf,Denise\n"
+                    "second.pdf,Edith\n"))
+          (pdf-test-with-pdf "forms.pdf"
+            (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+              (should (= 2 (pdf-form-import-csv-batch table))))
+            (with-current-buffer "*PDF form CSV*"
+              (should (string-match-p "missing\\.pdf" (buffer-string)))))
+          (dolist (expected `((,first . "Charles") (,second . "Edith")))
+            (pdf-test-with-pdf (car expected)
+              (should (equal (cdr (assoc "name" (pdf-form-values)))
+                             (cdr expected))))))
+      (delete-directory dir t))))
+
 ;; Signing.  The tests create a throwaway NSS database with a
 ;; self-signed certificate, and sign temporary copies of the fixtures.
 
