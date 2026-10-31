@@ -82,13 +82,17 @@ Implement and describe basic org example."
     (highlight (color . "yellow"))
     (squiggly (color . "orange"))
     (strike-out(color . "red"))
-    (underline (color . "blue")))
+    (underline (color . "blue"))
+    (square (color . "red"))
+    (circle (color . "red"))
+    (line (color . "red"))
+    (stamp (icon . "Approved")))
   "An alist of initial properties for new annotations.
 
 The alist contains a sub-alist for each of the currently available
-annotation types, i.e. text, highlight, squiggly, strike-out and
-underline.  Additionally a sub-alist with a key of t acts as a default
-entry.
+annotation types, i.e. text, highlight, squiggly, strike-out,
+underline, square, circle, line and stamp.  Additionally a sub-alist
+with a key of t acts as a default entry.
 
 Each of these sub-alists contain default property-values of newly
 added annotations of its respective type.
@@ -96,7 +100,10 @@ added annotations of its respective type.
 Some of the most important properties and their types are label
 \(a string\), contents \(a string\), color \(a color\) and, for
 text-annotations only, icon \(one of the standard icon-types, see
-`pdf-annot-standard-text-icons'\).
+`pdf-annot-standard-text-icons'\).  Square and circle annotations
+additionally have an interior-color \(a color or nil\), the fill
+color, and stamps an icon from `pdf-info-standard-stamp-icons'.
+Stamps are drawn with fixed colors and have no label.
 
 For example a value of
 
@@ -123,10 +130,23 @@ to \"Joe\"."
                         (cons :tag "Property"
                               (symbol :tag "Key  ")
                               (sexp :tag "Value"))))
+               (interior-color '(cons :tag "Fill color"
+                                      (const interior-color)
+                                      (choice (const :tag "None" nil) color)))
+               (stamp-icon `(cons :tag "Icon"
+                                  (const icon)
+                                  (choice
+                                   ,@(mapcar (lambda (icon)
+                                               `(const ,icon))
+                                             pdf-info-standard-stamp-icons))))
                (text-properties
                 `(set ,label ,contents ,color ,icon ,other))
                (markup-properties
                 `(set ,label ,contents ,color))
+               (shape-properties
+                `(set ,label ,contents ,color ,interior-color))
+               (stamp-properties
+                `(set ,contents ,stamp-icon))
                (all-properties
                 `(set ,label ,contents ,color ,icon ,other)))
           `(set
@@ -135,7 +155,11 @@ to \"Joe\"."
             (cons :tag "Highlight Annotations" (const highlight) ,markup-properties)
             (cons :tag "Underline Annotations" (const underline) ,markup-properties)
             (cons :tag "Squiggly Annotations" (const squiggly) ,markup-properties)
-            (cons :tag "Strike-out Annotations" (const strike-out) ,markup-properties))))
+            (cons :tag "Strike-out Annotations" (const strike-out) ,markup-properties)
+            (cons :tag "Square Annotations" (const square) ,shape-properties)
+            (cons :tag "Circle Annotations" (const circle) ,shape-properties)
+            (cons :tag "Line Annotations" (const line) ,markup-properties)
+            (cons :tag "Stamp Annotations" (const stamp) ,stamp-properties))))
 
 (defcustom pdf-annot-print-annotation-functions
   '(pdf-annot-print-annotation-latex-maybe)
@@ -186,6 +210,16 @@ annoyed while reading the annotations."
   "The display action used when displaying attachments."
   :type display-buffer--action-custom-type)
 
+(defcustom pdf-annot-moveable-types '(file text stamp)
+  "A list of annotation types, which may be moved by dragging them.
+
+Dragging with the mouse inside such an annotation moves it instead
+of selecting text.  That is why `square' and `circle', which often
+surround text, are not in this list by default.  Line annotations
+can not be moved this way."
+  :type '(set (const file) (const text) (const square)
+              (const circle) (const stamp)))
+
 (defconst pdf-annot-annotation-types
   '(3d caret circle file
        free-text highlight ink line link movie poly-line polygon popup
@@ -195,7 +229,8 @@ annoyed while reading the annotations."
 
 (defcustom pdf-annot-list-listed-types
   (if (pdf-info-markup-annotations-p)
-      (list 'text 'file 'squiggly 'highlight 'underline 'strike-out)
+      (list 'text 'file 'squiggly 'highlight 'underline 'strike-out
+            'square 'circle 'line 'stamp)
     (list 'text 'file))
   "A list of annotation types displayed in the list buffer."
   :type `(set ,@(mapcar (lambda (type)
@@ -304,7 +339,13 @@ Setting this after the package was loaded has no effect."
         (define-key smap "s" #'pdf-annot-add-squiggly-markup-annotation)
         (define-key smap "u" #'pdf-annot-add-underline-markup-annotation)
         (define-key smap "o" #'pdf-annot-add-strikeout-markup-annotation)
-        (define-key smap "h" #'pdf-annot-add-highlight-markup-annotation)))
+        (define-key smap "h" #'pdf-annot-add-highlight-markup-annotation)
+        (when (pdf-info-shape-annotations-p)
+          (define-key smap "r" #'pdf-annot-add-square-annotation)
+          (define-key smap "c" #'pdf-annot-add-circle-annotation)
+          (define-key smap "L" #'pdf-annot-add-line-annotation))
+        (when (pdf-info-stamp-annotations-p)
+          (define-key smap "S" #'pdf-annot-add-stamp-annotation))))
     kmap)
   "Keymap used for `pdf-annot-minor-mode'.")
 
@@ -365,10 +406,24 @@ Setting this after the package was loaded has no effect."
         `(menu-item "Change icon"
                     ,(pdf-annot-create-icon-submenu a)
                     :help "Change the appearance of this annotation.")))
-    (define-key menu [change-color]
-      `(menu-item "Change color"
-                  ,(pdf-annot-create-color-submenu a)
-                  :help "Change the appearance of this annotation."))
+    (when (and (eq (pdf-annot-get-type a) 'stamp)
+               (pdf-info-stamp-annotations-p))
+      (define-key menu [change-stamp-icon]
+        `(menu-item "Change stamp"
+                    ,(pdf-annot-create-icon-submenu
+                      a (remove "Draft" pdf-info-standard-stamp-icons))
+                    :help "Change the appearance of this annotation.")))
+    (when (and (memq (pdf-annot-get-type a) '(square circle))
+               (pdf-info-shape-annotations-p))
+      (define-key menu [change-interior-color]
+        `(menu-item "Change fill color"
+                    ,(pdf-annot-create-color-submenu a 'interior-color)
+                    :help "Change the color this annotation is filled with.")))
+    (unless (eq (pdf-annot-get-type a) 'stamp)
+      (define-key menu [change-color]
+        `(menu-item "Change color"
+                    ,(pdf-annot-create-color-submenu a)
+                    :help "Change the appearance of this annotation.")))
     (define-key menu [activate-annotation]
       `(menu-item "Activate"
                   ,(lambda ()
@@ -377,9 +432,19 @@ Setting this after the package was loaded has no effect."
                   :help "Activate this annotation."))
     menu))
 
-(defun pdf-annot-create-color-submenu (a)
-  "Show the user a color menu for their annotation A."
-  (let ((menu (make-sparse-keymap)))
+(defun pdf-annot-create-color-submenu (a &optional property)
+  "Show the user a color menu for their annotation A.
+
+PROPERTY is the color property to change and defaults to `color'.
+For `interior-color' the menu also offers to remove the color."
+  (let ((menu (make-sparse-keymap))
+        (property (or property 'color)))
+    (when (eq property 'interior-color)
+      (define-key menu [color-none]
+        `(menu-item "None"
+                    ,(lambda ()
+                       (interactive)
+                       (pdf-annot-put a property nil)))))
     (define-key menu [color-chooser]
                 `(menu-item "Choose ..."
                             ,(lambda ()
@@ -390,7 +455,7 @@ Setting this after the package was loaded has no effect."
                                 (let ((callback (make-symbol "xcallback")))
                                   (fset callback
                                         (lambda (color)
-                                          (pdf-annot-put a 'color color)
+                                          (pdf-annot-put a property color)
                                           (setq pdf-annot-color-history
                                                 (cons color
                                                       (remove color pdf-annot-color-history)))
@@ -403,13 +468,16 @@ Setting this after the package was loaded has no effect."
                   `(menu-item ,color
                               ,(lambda nil
                                  (interactive)
-                                 (pdf-annot-put a 'color color)))))
+                                 (pdf-annot-put a property color)))))
     menu))
 
-(defun pdf-annot-create-icon-submenu (a)
-  "Show the user an icon menu for the annotation A."
+(defun pdf-annot-create-icon-submenu (a &optional icons)
+  "Show the user an icon menu for the annotation A.
+
+ICONS is the list of icon names to offer and defaults to
+`pdf-annot-standard-text-icons'."
   (let ((menu (make-sparse-keymap)))
-    (dolist (icon (reverse pdf-annot-standard-text-icons))
+    (dolist (icon (reverse (or icons pdf-annot-standard-text-icons)))
       (define-key menu (vector (intern (format "icon-%s" icon)))
                   `(menu-item ,icon
                               ,(lambda nil
@@ -615,11 +683,23 @@ Annotation types are defined in `pdf-annot-markup-annotation-types'."
 
 (defun pdf-annot-property-modifiable-p (a property)
   "Return non-nil if PROPERTY for annotation A is editable."
-  (or (memq property '(edges color flags contents))
-      (and (pdf-annot-markup-annotation-p a)
-           (memq property '(label opacity popup popup-is-open)))
-      (and (pdf-annot-text-annotation-p a)
-           (memq property '(icon is-open)))))
+  (let ((type (pdf-annot-get-type a)))
+    (or (memq property '(color flags contents))
+        (and (eq property 'edges)
+             ;; Use the line property to move lines.
+             (not (eq type 'line)))
+        (and (pdf-annot-markup-annotation-p a)
+             ;; epdfinfo does not handle stamps as markup annotations.
+             (not (eq type 'stamp))
+             (memq property '(label opacity popup popup-is-open)))
+        (and (pdf-annot-text-annotation-p a)
+             (memq property '(icon is-open)))
+        (and (memq type '(square circle))
+             (eq property 'interior-color))
+        (and (eq type 'line)
+             (eq property 'line))
+        (and (eq type 'stamp)
+             (eq property 'icon)))))
 
 (defun pdf-annot-activate-annotation (a)
   "Run handler functions on A to activate the annotation.
@@ -943,7 +1023,7 @@ SIZE is a cons (SX . SY), by which edges are scaled."
                 (pdf-annot-get-display-edges a)
                 size 'round))
         (moveable-p (memq (pdf-annot-get a 'type)
-                          '(file text)))
+                          pdf-annot-moveable-types))
         hotspots)
     (dolist (e edges)
       (pdf-util-with-edges (e)
@@ -1032,13 +1112,18 @@ other annotations."
   "Create and add a new annotation of type TYPE to the document.
 
 TYPE determines the kind of annotation to add and maybe one of
-`text', `squiggly', `underline', `strike-out' or `highlight'.
+`text', `squiggly', `underline', `strike-out', `highlight',
+`square', `circle', `line' or `stamp', see
+`pdf-info-creatable-annotation-types'.
 
 EDGES determines where the annotation will appear on the page.
 If type is `text', this should be a single list of \(LEFT TOP
 RIGHT BOT\).  Though, in this case only LEFT and TOP are used,
-since the size of text annotations is fixed. Otherwise EDGES may
-be a list of such elements.  All values should be image relative
+since the size of text annotations is fixed.  For `square',
+`circle' and `stamp' it should be a single such list as well.
+For `line' it should be a single list \(X1 Y1 X2 Y2\) of the
+start and end point of the line.  Otherwise EDGES may be a list
+of such elements.  All values should be image relative
 coordinates, i.e. in the range \[0;1\].
 
 PROPERTY-ALIST is a list of annotation properties, which will be
@@ -1065,27 +1150,48 @@ Return the new annotation."
     (setq page (pdf-view-current-page)))
   (unless (consp (car-safe edges))
     (setq edges (list edges)))
-  (when (and (eq type 'text)
+  (when (and (memq type '(text square circle line stamp))
              (> (length edges) 1))
-    (error "Edges argument should be a single edge-list for text annotations"))
+    (error "Edges argument should be a single edge-list for %s annotations"
+           type))
   (let* ((selection-style pdf-view-selection-style)
+         (shape-p (memq type '(square circle line stamp)))
          (non-markup (pcase type
                        ('text t)
-                       ('highlight pdf-view--have-rectangle-region)))
+                       ('highlight pdf-view--have-rectangle-region)
+                       (_ shape-p)))
+         (extra-args
+          (pcase type
+            ;; The start and end point of the line.
+            ('line edges)
+            ;; Draft can not be set later, so pass the icon along.
+            ('stamp
+             (let ((icon (cdr (assq 'icon property-alist))))
+               (setq property-alist (assq-delete-all
+                                     'icon (copy-sequence property-alist)))
+               (and icon (list icon))))
+            (_ (unless non-markup edges))))
          (a (apply #'pdf-info-addannot
                    page
-                   (if non-markup
-                       (car edges)
+                   (cond
+                    ((eq type 'line)
+                     ;; The server derives the edges from the points.
+                     (cl-destructuring-bind (x1 y1 x2 y2) (car edges)
+                       (list (min x1 x2) (min y1 y2)
+                             (max x1 x2) (max y1 y2))))
+                    (non-markup
+                     (car edges))
+                    (t
                      (apply #'pdf-util-edges-union
                             (apply #'append
                                    (mapcar
                                     (lambda (e)
                                       (pdf-info-getselection page e selection-style))
-                                    edges))))
+                                    edges)))))
                    type
                    selection-style
                    nil
-                   (unless non-markup edges)))
+                   extra-args))
          (id (pdf-annot-get-id a)))
     (when property-alist
       (condition-case err
@@ -1252,6 +1358,143 @@ properties. See also `pdf-annot-add-markup-annotation'."
   (interactive (list (pdf-view-active-region t)))
   (pdf-annot-add-markup-annotation list-of-edges 'highlight color property-alist))
 
+(defun pdf-annot--shape-properties (type &rest alists)
+  "Merge ALISTS and the defaults for new annotations of TYPE.
+
+Drop properties, which annotations of TYPE do not have, e.g. the
+default label for stamps."
+  (let ((dummy `((type . ,type))))
+    (cl-remove-if-not
+     (lambda (elt)
+       (pdf-annot-property-modifiable-p dummy (car elt)))
+     (apply #'pdf-annot-merge-alists
+            (append
+             alists
+             (list (cdr (assq type pdf-annot-default-annotation-properties))
+                   (cdr (assq t pdf-annot-default-annotation-properties)))
+             ;; Stamps are drawn in fixed colors.
+             (unless (eq type 'stamp)
+               (list (when pdf-annot-color-history
+                       `((color . ,(car pdf-annot-color-history))))
+                     '((color . "#ff0000")))))))))
+
+(defun pdf-annot--region-rectangle (region)
+  "Return the bounding box of all edges in REGION.
+
+REGION should be a cons \(PAGE . LIST-OF-EDGES\), as returned by
+`pdf-view-active-region'.  Its edges may be unordered, e.g. when
+they were selected by dragging upwards."
+  (apply #'pdf-util-edges-union
+         (mapcar (lambda (e)
+                   (pdf-util-with-edges (e)
+                     (list (min e-left e-right) (min e-top e-bot)
+                           (max e-left e-right) (max e-top e-bot))))
+                 (cdr region))))
+
+(defun pdf-annot-add-shape-annotation (region type &optional color
+                                              property-alist)
+  "Add a new shape annotation in the selected window.
+
+REGION determines the area of the annotation and should be a cons
+cell \(PAGE . LIST-OF-EDGES\) where LIST-OF-EDGES should be list
+of \(LEFT TOP RIGHT BOT\), each value a relative coordinate.
+A `square' or `circle' fills the bounding box of all these edges.
+A `line' goes from \(LEFT . TOP\) to \(RIGHT . BOT\) of the
+first element, i.e. from where the mouse was pressed to where it
+was released, if the region was selected by dragging (without
+Meta, which makes a rectangle out of the region).
+
+TYPE should be one of `square', `circle' or `line'.
+
+Merge COLOR as a color property with PROPERTY-ALIST and
+`pdf-annot-default-annotation-properties' and apply the
+result to the created annotation.
+
+See also `pdf-annot-add-annotation'.
+
+Return the new annotation."
+  (interactive
+   (list (pdf-view-active-region t)
+         (let ((type (completing-read "Shape type (default square): "
+                                      '("square" "circle" "line")
+                                      nil t)))
+           (if (equal type "") 'square (intern type)))
+         (pdf-annot-read-color)))
+  (pdf-util-assert-pdf-window)
+  (unless (memq type '(square circle line))
+    (error "Not a shape annotation type: %s" type))
+  (pdf-annot-add-annotation
+   type
+   (if (eq type 'line)
+       (cadr region)
+     (pdf-annot--region-rectangle region))
+   (pdf-annot--shape-properties
+    type (and color `((color . ,color))) property-alist)
+   (car region)))
+
+(defun pdf-annot-add-square-annotation (region &optional color property-alist)
+  "Add a new square annotation in the selected window.
+
+REGION defines the annotation boundary.  COLOR defines the
+annotation color and PROPERTY-ALIST defines additional annotation
+properties, e.g. its fill color `interior-color'.  See also
+`pdf-annot-add-shape-annotation'."
+  (interactive (list (pdf-view-active-region t)))
+  (pdf-annot-add-shape-annotation region 'square color property-alist))
+
+(defun pdf-annot-add-circle-annotation (region &optional color property-alist)
+  "Add a new circle annotation in the selected window.
+
+REGION defines the bounding box of the circle (an ellipse,
+really).  COLOR defines the annotation color and PROPERTY-ALIST
+defines additional annotation properties, e.g. its fill color
+`interior-color'.  See also `pdf-annot-add-shape-annotation'."
+  (interactive (list (pdf-view-active-region t)))
+  (pdf-annot-add-shape-annotation region 'circle color property-alist))
+
+(defun pdf-annot-add-line-annotation (region &optional color property-alist)
+  "Add a new line annotation in the selected window.
+
+The line goes from where the mouse button was pressed to where it
+was released, when REGION was selected by dragging.  COLOR
+defines the annotation color and PROPERTY-ALIST defines
+additional annotation properties.  See also
+`pdf-annot-add-shape-annotation'."
+  (interactive (list (pdf-view-active-region t)))
+  (pdf-annot-add-shape-annotation region 'line color property-alist))
+
+(defun pdf-annot-read-stamp-icon (&optional prompt)
+  "Read and return the name of a stamp icon using PROMPT.
+
+See `pdf-info-standard-stamp-icons'."
+  (let ((default (or (cdr (assq 'icon (cdr (assq 'stamp pdf-annot-default-annotation-properties))))
+                     "Approved")))
+    (completing-read (format "%s (default %s): " (or prompt "Stamp") default)
+                     pdf-info-standard-stamp-icons nil t nil nil default)))
+
+(defun pdf-annot-add-stamp-annotation (region &optional icon property-alist)
+  "Add a new stamp annotation in the selected window.
+
+REGION determines the area of the stamp, see
+`pdf-annot-add-shape-annotation'.  ICON should be one of
+`pdf-info-standard-stamp-icons' and is merged as an icon property
+with PROPERTY-ALIST and `pdf-annot-default-annotation-properties'.
+Interactively, read ICON in the minibuffer.
+
+See also `pdf-annot-add-annotation'.
+
+Return the new annotation."
+  (interactive
+   (list (pdf-view-active-region t)
+         (pdf-annot-read-stamp-icon)))
+  (pdf-util-assert-pdf-window)
+  (pdf-annot-add-annotation
+   'stamp
+   (pdf-annot--region-rectangle region)
+   (pdf-annot--shape-properties
+    'stamp (and icon `((icon . ,icon))) property-alist)
+   (car region)))
+
 (defun pdf-annot-read-color (&optional prompt)
   "Read and return a color using PROMPT.
 
@@ -1299,7 +1542,7 @@ occurrence in ALISTS."
   "Pretty print annotation A's property PROPERTY."
   (let ((value (pdf-annot-get a property)))
     (cl-case property
-      (color
+      ((color interior-color)
        (propertize (or value "")
                    'face (and value
                               `(:background ,value))))
@@ -1672,7 +1915,7 @@ Currently supported properties are page, type, label, date and contents."
 
 Return nil, if not available."
   (cl-case property
-    (color (pdf-util-color-completions))
+    ((color interior-color) (pdf-util-color-completions))
     (icon (copy-sequence pdf-annot-standard-text-icons))))
 
 (defun pdf-annot-compare-annotations (a1 a2)

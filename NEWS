@@ -18,10 +18,23 @@
 - Add ~pdf-a11y-report~ to review the accessibility of tagged PDFs
   + A conformance checker like veraPDF cannot judge reading order, the heading outline or whether alt text is real. ~M-x pdf-a11y-report~ lists what a person has to check: whether the document is tagged, its language and PDF/UA claim, untagged pages, fonts that are not embedded, every figure with its alt text (flagging missing, empty, generic and file-name alt text), the headings in reading order (flagging skipped levels) and the reading order of each page (flagging content read away from its page).
   + Every entry is a button that shows the element in the PDF and highlights it where its area is known.
+- Create square, circle, line and stamp annotations #179
+  + Select a region with the mouse, then ~C-c C-a r~ (square), ~C-c C-a c~ (circle), ~C-c C-a L~ (line) or ~C-c C-a S~ (stamp), or use the new "Add shape annotation" entry of the context menu.
+  + A line goes from where a plain mouse drag starts to where it ends.
+  + Squares and circles can be filled: set their ~interior-color~ property, or use "Change fill color" in the annotation's context menu.
+  + Stamps use one of the standard icons in ~pdf-info-standard-stamp-icons~ (Approved, Confidential, Draft, ...).
+  + These annotation types are now shown in the annotation list by default.
+  + Requires poppler-glib >= 0.26 for square, circle and line and >= 22.07 for stamps; rebuild ~epdfinfo~ to get them.
+- New option ~pdf-annot-moveable-types~ to choose which annotations can be dragged around with the mouse; it now includes stamps.
+
+** Functionality improvements and fixes
+- Annotation colors no longer get slightly darker each time a document is saved and reopened.
 
 ** API changes (for package developers)
 - New server commands ~structure~, ~fonts~ and ~xmpmetadata~, with the wrappers ~pdf-info-structure~, ~pdf-info-fonts~ and ~pdf-info-xmp-metadata~.
   + ~structure~ needs poppler-glib >= 0.26; ~pdf-info-structure-tree-p~ tells whether the server has it (feature ~structure-tree~).
+- ~epdfinfo~ reports the features ~shape-annotations~ and ~stamp-annotations~; ~addannot~ accepts the types ~square~, ~circle~, ~line~ (with optional start and end points) and ~stamp~ (with an optional icon), and ~editannot~ the properties ~interior-color~ and ~line~ and ~icon~ for stamps.
+- New functions ~pdf-info-shape-annotations-p~ and ~pdf-info-stamp-annotations-p~.
 
 * Version 1.3.0
 ** New functionality to improve overall user experience

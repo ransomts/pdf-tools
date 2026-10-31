@@ -19,6 +19,8 @@ HAVE_POPPLER_ANNOT_WRITE="no   (requires poppler-glib >= 0.19.4)"
 HAVE_POPPLER_ANNOT_MARKUP="no (requires poppler-glib >= 0.26)"
 HAVE_POPPLER_SIGNATURES="no   (requires poppler-glib >= 21.12)"
 HAVE_POPPLER_STRUCTURE="no   (requires poppler-glib >= 0.26)"
+HAVE_POPPLER_ANNOT_SHAPES="no (requires poppler-glib >= 0.26)"
+HAVE_POPPLER_ANNOT_STAMP="no (requires poppler-glib >= 22.07)"
 HAVE_POPPLER_FORM_RESET="no   (requires poppler-glib >= 0.90)"
 
 PKG_CHECK_MODULES([png], [libpng])
@@ -30,6 +32,8 @@ PKG_CHECK_EXISTS([poppler-glib >= 0.22], [HAVE_POPPLER_FIND_OPTS=yes])
 PKG_CHECK_EXISTS([poppler-glib >= 0.26], [HAVE_POPPLER_ANNOT_MARKUP=yes])
 PKG_CHECK_EXISTS([poppler-glib >= 21.12], [HAVE_POPPLER_SIGNATURES=yes])
 PKG_CHECK_EXISTS([poppler-glib >= 0.26], [HAVE_POPPLER_STRUCTURE=yes])
+PKG_CHECK_EXISTS([poppler-glib >= 0.26], [HAVE_POPPLER_ANNOT_SHAPES=yes])
+PKG_CHECK_EXISTS([poppler-glib >= 22.07], [HAVE_POPPLER_ANNOT_STAMP=yes])
 PKG_CHECK_EXISTS([poppler-glib >= 0.88], [AC_DEFINE([HAVE_POPPLER_FORM_TOOLTIP],1,
   [Define to 1 to read form field tooltips (requires poppler-glib >= 0.88).])])
 PKG_CHECK_EXISTS([poppler-glib >= 0.90], [HAVE_POPPLER_FORM_RESET=yes])
@@ -81,6 +85,16 @@ if test "$HAVE_POPPLER_STRUCTURE" = yes; then
     [Define to 1 to enable reading the structure tree of tagged PDFs (requires poppler-glib >= 0.26).])
 fi
 
+if test "$HAVE_POPPLER_ANNOT_SHAPES" = yes; then
+  AC_DEFINE([HAVE_POPPLER_ANNOT_SHAPES],1,
+    [Define to 1 to enable adding of square, circle and line annotations (requires poppler-glib >= 0.26).])
+fi
+
+if test "$HAVE_POPPLER_ANNOT_STAMP" = yes; then
+  AC_DEFINE([HAVE_POPPLER_ANNOT_STAMP],1,
+    [Define to 1 to enable adding of stamp annotations (requires poppler-glib >= 22.07).])
+fi
+
 AC_CANONICAL_HOST
 # Checks for header files.
 AC_CHECK_HEADERS([stdlib.h string.h strings.h err.h])
@@ -119,4 +133,6 @@ echo "Is modifying markup annotations enabled ? ${HAVE_POPPLER_ANNOT_MARKUP}"
 echo "Is resetting forms enabled ?              ${HAVE_POPPLER_FORM_RESET}"
 echo "Is validating signatures enabled ?        ${HAVE_POPPLER_SIGNATURES}"
 echo "Is reading the structure tree enabled ?   ${HAVE_POPPLER_STRUCTURE}"
+echo "Is adding shape annotations enabled ?     ${HAVE_POPPLER_ANNOT_SHAPES}"
+echo "Is adding stamp annotations enabled ?     ${HAVE_POPPLER_ANNOT_STAMP}"
 echo

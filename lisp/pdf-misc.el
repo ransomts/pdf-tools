@@ -112,6 +112,15 @@
      ["squiggly" pdf-annot-add-squiggly-markup-annotation]
      ["underline" pdf-annot-add-underline-markup-annotation]
      ["strikeout" pdf-annot-add-strikeout-markup-annotation])
+    ("Add shape annotation"
+     :active (pdf-view-active-region-p)
+     :visible (and (bound-and-true-p pdf-annot-minor-mode)
+                   (pdf-info-shape-annotations-p))
+     ["square" pdf-annot-add-square-annotation]
+     ["circle" pdf-annot-add-circle-annotation]
+     ["line" pdf-annot-add-line-annotation]
+     ["stamp" pdf-annot-add-stamp-annotation
+      :visible (pdf-info-stamp-annotations-p)])
     ["--" nil :visible (bound-and-true-p pdf-annot-minor-mode)]
     ["Display Annotations" pdf-annot-list-annotations
      :help "List all annotations"
