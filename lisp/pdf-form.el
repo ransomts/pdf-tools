@@ -714,6 +714,24 @@ before any field is changed, so an error leaves the form as it was."
   "Format the ISO 8601 string TIME for display."
   (replace-regexp-in-string "T" " " time))
 
+(defun pdf-form--signature-heading (field)
+  "Return the heading line of signature FIELD.
+
+Poppler can only add signature fields, so `pdf-form-sign' signs an
+empty field by putting a new field with the signature over it.  An
+empty field under a signed one is not a signature that failed, but
+the field the signature covers: say so."
+  (let ((cover (and (pdf-form-unsigned-p field)
+                    (cl-find-if
+                     (lambda (other) (not (pdf-form-unsigned-p other)))
+                     (cdr (pdf-form--signatures-at field))))))
+    (format "%s (page %d%s)\n"
+            (alist-get 'name field)
+            (alist-get 'page field)
+            (if cover
+                (format ", empty, under %s" (alist-get 'name cover))
+              ""))))
+
 (defun pdf-form-describe-signatures (fields)
   "Show whether the signatures of FIELDS are valid."
   (let ((buffer (current-buffer)))
@@ -721,8 +739,8 @@ before any field is changed, so an error leaves the form as it was."
       (dolist (f fields)
         (let-alist (with-current-buffer buffer
                      (pdf-info-validatesignature (alist-get 'id f)))
-          (princ (format "%s (page %d)\n" (alist-get 'name f)
-                         (alist-get 'page f)))
+          (princ (with-current-buffer buffer
+                   (pdf-form--signature-heading f)))
           (princ (format "  Signature:   %s\n"
                          (cl-case .signature-status
                            (valid "valid")
