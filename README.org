@@ -239,6 +239,7 @@ This also applies when updating via MELPA / NonGNU ELPA (except for running the 
 + Forms :: Fill in the text fields, checkboxes, radio buttons and lists of interactive PDF forms by clicking on them, with ~TAB~ and ~S-TAB~, or with ~C-c C-e~, then save the values back to the PDF file. The fields you can interact with are marked on the page; toggle the marks with ~C-c C-s~. Reset forms with their reset buttons or ~M-x pdf-form-reset~, and fill them from Lisp with ~pdf-form-fill~. Check whether the document's digital signatures are valid with ~M-x pdf-form-signatures~, and sign it with ~M-x pdf-form-sign~.
 + Attachments :: Save files attached to the PDF-file or list them in a dired buffer.
 + Outline :: Use ~imenu~ or a special buffer (=M-x pdf-outline=) to examine and navigate the PDF's outline.
++ Layers :: List the layers (optional content groups) of CAD drawings, maps or exams as a tree and show or hide them (=M-x pdf-layers=, =C-c C-l=). This is view state: it is not saved to the file, and reverting the buffer resets it.
 + SyncTeX :: Jump from a position on a page directly to the TeX source and vice versa.
 + Virtual :: Use a collection of documents as if it were one, big single PDF.
 + Pages :: Delete, extract, move and rotate pages, and insert pages of other PDFs, changing the file itself (needs the =qpdf= program). [[id:7740dc50-5c1c-4d94-b896-264066d06efa][More information here]].

@@ -1,0 +1,57 @@
+%PDF-1.5
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R] /D << /Name (Default) /ON [4 0 R 6 0 R 7 0 R] /OFF [5 0 R 8 0 R] /Order [4 0 R 5 0 R [6 0 R] [(Language) 7 0 R 8 0 R]] /RBGroups [[7 0 R 8 0 R]] >> >> >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 220 200] /Resources << /Properties << /L4 4 0 R /L5 5 0 R /L6 6 0 R /L7 7 0 R /L8 8 0 R >> >> /Contents 9 0 R /Annots [10 0 R] >>
+endobj
+4 0 obj
+<< /Type /OCG /Name (Base) >>
+endobj
+5 0 obj
+<< /Type /OCG /Name (Answers) >>
+endobj
+6 0 obj
+<< /Type /OCG /Name (Hints) >>
+endobj
+7 0 obj
+<< /Type /OCG /Name (English) >>
+endobj
+8 0 obj
+<< /Type /OCG /Name (Deutsch) >>
+endobj
+9 0 obj
+<< /Length 241 >>
+stream
+/OC /L4 BDC 1 0 0 rg 20 100 30 30 re f EMC
+/OC /L5 BDC 0 1 0 rg 60 100 30 30 re f EMC
+/OC /L6 BDC 0 0 1 rg 100 100 30 30 re f EMC
+/OC /L7 BDC 0 0 0 rg 140 100 30 30 re f EMC
+/OC /L8 BDC 1 1 0 rg 180 100 30 30 re f EMC
+0.5 G 10 160 40 30 re S
+endstream
+endobj
+10 0 obj
+<< /Type /Annot /Subtype /Link /Rect [10 160 50 190] /Border [0 0 0] /A << /S /SetOCGState /State [/Toggle 5 0 R] >> >>
+endobj
+xref
+0 11
+0000000000 65535 f 
+0000000009 00000 n 
+0000000264 00000 n 
+0000000321 00000 n 
+0000000510 00000 n 
+0000000555 00000 n 
+0000000603 00000 n 
+0000000649 00000 n 
+0000000697 00000 n 
+0000000745 00000 n 
+0000001037 00000 n 
+trailer
+<< /Size 11 /Root 1 0 R >>
+startxref
+1173
+%%EOF

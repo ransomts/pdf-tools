@@ -2315,10 +2315,12 @@ cmd_features (const epdfinfo_t *ctx, const command_arg_t *args)
     "no-stamp-annotations",
 #endif
 #ifdef HAVE_POPPLER_SIGNING
-    "signing"
+    "signing",
 #else
-    "no-signing"
+    "no-signing",
 #endif
+    /* Optional content groups, available since poppler-glib 0.12. */
+    "layers"
   };
   int i;
   OK_BEGIN ();
@@ -3379,6 +3381,252 @@ cmd_xmpmetadata (const epdfinfo_t *ctx, const command_arg_t *args)
   g_free (xmp);
 }
 
+/* Name: layers
+   Args: filename
+   Returns: The document's optional content groups (layers), in the
+   order of its layer panel, as a, possibly empty, list of records:
+
+   depth id visible radio-group title
+
+   DEPTH is the level in the tree (>= 1); a layer's children follow
+   it with a larger depth.  ID is the layer's 1-based number among
+   all layers in this order, as accepted by setlayer, or 0 if the
+   entry is only a label grouping its children.  VISIBLE is 1 or 0,
+   and 0 for labels.  RADIO-GROUP is 0, or a positive number shared
+   by all layers of the same radio button group (showing one of them
+   hides the others).  TITLE is the layer's or label's name.
+
+   The visibility of layers is a property of the open document, not
+   of the file: it is lost when the document is closed and it is not
+   saved.
+
+   Errors: None
+*/
+
+/* Return the 1-based number of the radio button group of LAYER, or
+   0 if it belongs to none.  poppler-glib's group ids are truncated
+   pointers, so map them to small numbers in order of appearance,
+   using GROUPS. */
+static int
+layer_radio_group (PopplerLayer *layer, GArray *groups)
+{
+  gint id = poppler_layer_get_radio_button_group_id (layer);
+  guint i;
+
+  if (! id)
+    return 0;
+  for (i = 0; i < groups->len; ++i)
+    if (g_array_index (groups, gint, i) == id)
+      return i + 1;
+  g_array_append_val (groups, id);
+  return groups->len;
+}
+
+static void
+layers_print_walk (PopplerLayersIter *iter, int depth, int *n,
+                   GArray *groups)
+{
+  do
+    {
+      PopplerLayer *layer = poppler_layers_iter_get_layer (iter);
+      PopplerLayersIter *child = poppler_layers_iter_get_child (iter);
+
+      if (layer)
+        {
+          ++*n;
+          printf ("%d:%d:%d:%d:", depth, *n,
+                  poppler_layer_is_visible (layer) ? 1 : 0,
+                  layer_radio_group (layer, groups));
+          print_response_string (poppler_layer_get_title (layer), NEWLINE);
+          g_object_unref (layer);
+        }
+      else
+        {
+          gchar *title = poppler_layers_iter_get_title (iter);
+
+          printf ("%d:0:0:0:", depth);
+          print_response_string (title, NEWLINE);
+          g_free (title);
+        }
+
+      if (child)
+        {
+          layers_print_walk (child, depth + 1, n, groups);
+          poppler_layers_iter_free (child);
+        }
+    } while (poppler_layers_iter_next (iter));
+}
+
+/* Print the layers of DOC as described for the layers command. */
+static void
+layers_print (PopplerDocument *doc)
+{
+  PopplerLayersIter *iter = poppler_layers_iter_new (doc);
+  GArray *groups = g_array_new (FALSE, FALSE, sizeof (gint));
+  int n = 0;
+
+  if (iter)
+    {
+      layers_print_walk (iter, 1, &n, groups);
+      poppler_layers_iter_free (iter);
+    }
+  g_array_free (groups, TRUE);
+}
+
+/* Return the layer numbered ID (see the layers command) at or below
+   ITER, counting from *N, or NULL.  The caller has to unref it. */
+static PopplerLayer *
+layers_find_walk (PopplerLayersIter *iter, int id, int *n)
+{
+  do
+    {
+      PopplerLayer *layer = poppler_layers_iter_get_layer (iter);
+      PopplerLayersIter *child;
+
+      if (layer)
+        {
+          if (++*n == id)
+            return layer;
+          g_object_unref (layer);
+        }
+      child = poppler_layers_iter_get_child (iter);
+      if (child)
+        {
+          layer = layers_find_walk (child, id, n);
+          poppler_layers_iter_free (child);
+          if (layer)
+            return layer;
+        }
+    } while (poppler_layers_iter_next (iter));
+
+  return NULL;
+}
+
+static PopplerLayer *
+layers_find (PopplerDocument *doc, int id)
+{
+  PopplerLayersIter *iter = poppler_layers_iter_new (doc);
+  PopplerLayer *layer = NULL;
+  int n = 0;
+
+  if (iter)
+    {
+      layer = layers_find_walk (iter, id, &n);
+      poppler_layers_iter_free (iter);
+    }
+  return layer;
+}
+
+const command_arg_type_t cmd_layers_spec[] =
+  {
+    ARG_DOC,
+  };
+
+static void
+cmd_layers (const epdfinfo_t *ctx, const command_arg_t *args)
+{
+  OK_BEGIN ();
+  layers_print (args->value.doc->pdf);
+  OK_END ();
+}
+
+/* Name: setlayer
+   Args: filename id visible
+   Returns: The document's layers, as returned by the layers command,
+   after showing (VISIBLE is 1) or hiding (VISIBLE is 0) the layer
+   numbered ID.  Showing a layer of a radio button group hides the
+   other layers of its group.
+   Errors: If there is no layer numbered ID.
+*/
+
+const command_arg_type_t cmd_setlayer_spec[] =
+  {
+    ARG_DOC,
+    ARG_NATNUM,                 /* layer id */
+    ARG_BOOL,                   /* visible */
+  };
+
+static void
+cmd_setlayer (const epdfinfo_t *ctx, const command_arg_t *args)
+{
+  PopplerDocument *doc = args[0].value.doc->pdf;
+  int id = args[1].value.natnum;
+  PopplerLayer *layer = id > 0 ? layers_find (doc, id) : NULL;
+
+  perror_if_not (layer, "No such layer: %d", id);
+  /* poppler_layer_show hides the other layers of the radio button
+     group by itself. */
+  if (args[2].value.flag)
+    poppler_layer_show (layer);
+  else
+    poppler_layer_hide (layer);
+  g_object_unref (layer);
+
+  OK_BEGIN ();
+  layers_print (doc);
+  OK_END ();
+ error: ;
+}
+
+/* Name: ocgstate
+   Args: filename page index
+   Returns: The document's layers, as returned by the layers command,
+   after performing the set-OCG-state action of the INDEX'th link of
+   PAGE, see the ocg-state action of cmd_pagelinks.
+   Errors: If page is out of range or the link does not exist or has
+   no such action.
+*/
+
+const command_arg_type_t cmd_ocgstate_spec[] =
+  {
+    ARG_DOC,
+    ARG_NATNUM,                 /* page number */
+    ARG_NATNUM,                 /* link index */
+  };
+
+static void
+cmd_ocgstate (const epdfinfo_t *ctx, const command_arg_t *args)
+{
+  PopplerDocument *doc = args[0].value.doc->pdf;
+  int pn = args[1].value.natnum;
+  int index = args[2].value.natnum;
+  PopplerPage *page = poppler_document_get_page (doc, pn - 1);
+  GList *link_map = NULL, *item;
+  PopplerLinkMapping *link;
+
+  perror_if_not (page, "No such page %d", pn);
+  link_map = poppler_page_get_link_mapping (page);
+  link = index > 0 ? g_list_nth_data (link_map, index - 1) : NULL;
+  perror_if_not (link && link->action
+                 && link->action->type == POPPLER_ACTION_OCG_STATE,
+                 "No layer action at link %d of page %d", index, pn);
+
+  for (item = link->action->ocg_state.state_list; item; item = item->next)
+    {
+      PopplerActionLayer *state = item->data;
+      GList *l;
+
+      for (l = state->layers; l; l = l->next)
+        {
+          PopplerLayer *layer = l->data;
+          gboolean show = (state->action == POPPLER_ACTION_LAYER_ON
+                           || (state->action == POPPLER_ACTION_LAYER_TOGGLE
+                               && ! poppler_layer_is_visible (layer)));
+          if (show)
+            poppler_layer_show (layer);
+          else
+            poppler_layer_hide (layer);
+        }
+    }
+
+  OK_BEGIN ();
+  layers_print (doc);
+  OK_END ();
+ error:
+  if (page) g_object_unref (page);
+  if (link_map) poppler_page_free_link_mapping (link_map);
+}
+
 /* Name: quit
    Args: None
    Returns: Nothing
@@ -3430,12 +3678,51 @@ cmd_number_of_pages (const epdfinfo_t *ctx, const command_arg_t *args)
    'goto-remote' title filename page top
    'uri' title URI
    'launch' title program arguments
+   'ocg-state' title description page index
 
    top is desired vertical position, filename is the target PDF of the
-   `goto-remote' link.
+   `goto-remote' link.  An `ocg-state' link shows, hides or toggles
+   layers: description says which (e.g. "Show A, B; Toggle C"), and
+   page and index identify the link for the ocgstate command, which
+   performs it.  Outlines do not report this kind of action.
 
    Errors: None
 */
+
+/* Print the description, PN and INDEX of an ocg-state action, see
+   cmd_pagelinks. */
+static void
+action_print_ocg_state (PopplerAction *action, int pn, int index)
+{
+  GString *desc = g_string_new (NULL);
+  GList *item;
+
+  for (item = action->ocg_state.state_list; item; item = item->next)
+    {
+      PopplerActionLayer *state = item->data;
+      GList *l;
+
+      if (! state->layers)
+        continue;
+      if (desc->len > 0)
+        g_string_append (desc, "; ");
+      g_string_append (desc,
+                       state->action == POPPLER_ACTION_LAYER_ON ? "Show "
+                       : state->action == POPPLER_ACTION_LAYER_OFF ? "Hide "
+                       : "Toggle ");
+      for (l = state->layers; l; l = l->next)
+        {
+          const gchar *title = poppler_layer_get_title (l->data);
+
+          g_string_append (desc, title ? title : "?");
+          if (l->next)
+            g_string_append (desc, ", ");
+        }
+    }
+  print_response_string (desc->str, COLON);
+  printf ("%d:%d\n", pn, index);
+  g_string_free (desc, TRUE);
+}
 
 
 const command_arg_type_t cmd_pagelinks_spec[] =
@@ -3468,6 +3755,19 @@ cmd_pagelinks(const epdfinfo_t *ctx, const command_arg_t *args)
       /* LinkMappings have a different gravity. */
       r->y1 = height - r->y2;
       r->y2 = height - y1;
+
+      if (link->action
+          && link->action->type == POPPLER_ACTION_OCG_STATE)
+        {
+          printf ("%f %f %f %f:",
+                  r->x1 / width, r->y1 / height,
+                  r->x2 / width, r->y2 / height);
+          print_response_string ("ocg-state", COLON);
+          print_response_string (link->action->any.title, COLON);
+          action_print_ocg_state (link->action, pn,
+                                  g_list_position (link_map, item) + 1);
+          continue;
+        }
 
       if (! action_is_handled (link->action))
         continue;
@@ -5592,6 +5892,11 @@ static const command_t commands [] =
 #endif
     DEC_CMD (fonts),
     DEC_CMD (xmpmetadata),
+
+    /* Layers */
+    DEC_CMD (layers),
+    DEC_CMD (setlayer),
+    DEC_CMD (ocgstate),
 
     /* Annotations */
     DEC_CMD (getannots),
