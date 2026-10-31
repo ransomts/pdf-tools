@@ -252,3 +252,154 @@ The word \"replacement\" spans x from 477 to 563 pixel in it, at y 195.")
            (list (lambda (_) "/tmp/test.synctex.gz"))))
       (should (eq (pdf-sync--when-synctex 'pdf-sync-backward-search-mouse)
                   'pdf-sync-backward-search-mouse)))))
+
+(ert-deftest pdf-view-new-window-records-overlay-in-its-window ()
+  "The overlay of a new window belongs to that window, not to the selected one.
+
+`image-mode-new-window-functions' runs while some window is
+selected, and recording the overlay with the selected window leaves
+the new window without one of its own."
+  (let ((buf (get-buffer-create " *pdf-view-new-window-test*"))
+        (other-buf (get-buffer-create " *pdf-view-other-window*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "page")
+          (setq-local image-mode-winprops-alist nil)
+          (let* ((other (selected-window))
+                 (win (split-window other 10 'below)))
+            (unwind-protect
+                (progn
+                  (set-window-buffer win buf)
+                  (set-window-buffer other other-buf)
+                  (select-window other)
+                  ;; Keep our buffer current: that is the context the
+                  ;; hook runs in, with another window selected.
+                  (set-buffer buf)
+                  (let ((image-mode-new-window-functions
+                         '(pdf-view-new-window-function)))
+                    (cl-letf (((symbol-function 'pdf-view-goto-page)
+                               #'ignore))
+                      (image-mode-winprops win)))
+                  (let ((ol (image-mode-window-get 'overlay win)))
+                    (should (overlayp ol))
+                    (should (eq (overlay-get ol 'window) win))))
+              (delete-window win))))
+      (kill-buffer buf)
+      (kill-buffer other-buf))))
+
+(ert-deftest pdf-view-split-window-gets-its-own-overlay ()
+  "Two windows on one page keep one overlay each, and no leftovers.
+
+A leftover overlay still naming a window in its `window' property
+can win the display and go on showing the image it had before --
+how a signed PDF kept showing its empty signature field."
+  (pdf-test-with-test-pdf-view
+    (let ((pdf-win (selected-window)))
+      (set-window-buffer pdf-win (current-buffer))
+      (let ((new-win (split-window pdf-win 10 'below)))
+        (unwind-protect
+            (progn
+              (set-window-buffer new-win (current-buffer))
+              ;; What displaying the page does for each window after a
+              ;; split.  Rendering needs a window system, so only the
+              ;; overlay bookkeeping is exercised here.
+              (cl-letf (((symbol-function 'pdf-view-goto-page) #'ignore))
+                (dolist (win (list pdf-win new-win))
+                  (pdf-view--window-overlay win)))
+              (dolist (win (list pdf-win new-win))
+                (let ((ol (pdf-view-current-overlay win)))
+                  (should (overlayp ol))
+                  (should (eq (overlay-get ol 'window) win))))
+              (should (= 2 (length (seq-filter
+                                    (lambda (ov)
+                                      (overlay-get ov 'pdf-view))
+                                    (overlays-in (point-min) (point-max)))))))
+          (delete-window new-win))))))
+
+(ert-deftest pdf-view-window-overlay-deletes-a-leftover ()
+  "A left-over overlay claiming a window must not survive to win the display.
+
+Versions up to now recorded new overlays with the selected window,
+so a window could end up with an extra overlay that still named it
+in its `window' property.  Emacs picks between such overlays, and
+the stale one can win, so it is deleted when the page is displayed."
+  (let ((buf (get-buffer-create " *pdf-view-overlay-test*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "page")
+          (setq-local image-mode-winprops-alist nil)
+          (let* ((win (selected-window))
+                 (stale (make-overlay 1 2)))
+            (overlay-put stale 'pdf-view t)
+            (overlay-put stale 'window win)
+            (let ((ol (pdf-view--window-overlay win)))
+              (should (overlay-start ol))
+              (should (eq (overlay-get ol 'window) win))
+              (should (eq (pdf-view-current-overlay win) ol))
+              (should-not (overlay-start stale)))))
+      (kill-buffer buf))))
+
+(ert-deftest pdf-view-window-overlay-replaces-a-misowned-overlay ()
+  "A window gets an overlay of its own when its record names another window's.
+
+Recording an overlay with the selected window instead of the window
+being set up swapped two windows' overlays, so one of them went on
+showing the image of an earlier page.  An overlay recorded for one
+window but naming another is a leftover unless that other window
+records it too."
+  (let ((buf (get-buffer-create " *pdf-view-misowned-test*"))
+        (other-buf (get-buffer-create " *pdf-view-misowned-other*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "page")
+          (setq-local image-mode-winprops-alist nil)
+          (let ((win (selected-window)))
+            (let ((other (split-window win 10 'below)))
+              (unwind-protect
+                  (progn
+                    (set-window-buffer other buf)
+                    (set-window-buffer win other-buf)
+                    (let ((foreign (make-overlay (point-min) (point-max) nil t)))
+                      (overlay-put foreign 'pdf-view t)
+                      (overlay-put foreign 'window other)
+                      (image-mode-window-put 'overlay foreign win)
+                      ;; No window records it as its own: it cannot be
+                      ;; displayed, so this window gets a new overlay.
+                      (let ((ol (pdf-view--window-overlay win)))
+                        (should (overlay-start ol))
+                        (should (eq (overlay-get ol 'window) win))
+                        (should-not (eq ol foreign))
+                        (should (eq (pdf-view-current-overlay win) ol))
+                        (should-not (overlay-start foreign)))))
+                (delete-window other)))))
+      (kill-buffer buf)
+      (kill-buffer other-buf))))
+
+(ert-deftest pdf-view-window-overlay-keeps-a-claimed-overlay ()
+  "An overlay another window records as its own is not deleted."
+  (let ((buf (get-buffer-create " *pdf-view-claimed-test*"))
+        (other-buf (get-buffer-create " *pdf-view-claimed-other*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "page")
+          (setq-local image-mode-winprops-alist nil)
+          (let ((win (selected-window)))
+            (let ((other (split-window win 10 'below)))
+              (unwind-protect
+                  (progn
+                    (set-window-buffer other buf)
+                    (set-window-buffer win other-buf)
+                    (let ((foreign (make-overlay (point-min) (point-max) nil t)))
+                      (overlay-put foreign 'pdf-view t)
+                      (overlay-put foreign 'window other)
+                      (image-mode-window-put 'overlay foreign win)
+                      (image-mode-window-put 'overlay foreign other)
+                      (let ((ol (pdf-view--window-overlay win)))
+                        (should (overlay-start ol))
+                        (should (eq (overlay-get ol 'window) win))
+                        (should-not (eq ol foreign))
+                        (should (overlay-start foreign)))))
+                (delete-window other)))))
+      (kill-buffer buf)
+      (kill-buffer other-buf))))
+

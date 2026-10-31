@@ -1213,13 +1213,59 @@ It is equal to \(LEFT . TOP\) of the current slice in pixel."
   (pdf-view-display-image
    (pdf-view-create-page page window) page window))
 
+(defun pdf-view--window-overlay (window)
+  "Return the overlay displaying WINDOW's page, creating it if needed.
+
+The overlay of WINDOW is the one recorded in the image-mode
+properties of WINDOW, and it is the only one naming WINDOW: an
+overlay naming WINDOW that is not recorded there is left over from
+an earlier display and gets deleted.
+
+`pdf-view-new-window-function' used to record the overlay of a new
+window in the properties of the selected window instead of those of
+the window being set up, so a window could end up with two overlays
+and go on showing the image of an earlier page -- how a signed PDF
+kept showing its empty signature field."
+  (let* ((registered (pdf-view-current-overlay window))
+         (owned (and registered
+                     (overlay-start registered)
+                     (eq (overlay-get registered 'window) window))))
+    (dolist (ov (overlays-in (point-min) (point-max)))
+      (when (and (overlay-get ov 'pdf-view)
+                 (not (eq ov registered))
+                 (let ((owner (overlay-get ov 'window)))
+                   (or (eq owner window)
+                       (not (window-live-p owner)))))
+        (delete-overlay ov)))
+    (if owned
+        registered
+      ;; The recorded overlay names another window, and no window
+      ;; records it as its own: it cannot be displayed anywhere.
+      (when (and registered
+                 (overlay-start registered)
+                 (not (cl-some (lambda (props)
+                                 (and (windowp (car props))
+                                      (not (eq (car props) window))
+                                      (eq (cdr (assq 'overlay (cdr props)))
+                                          registered)))
+                               image-mode-winprops-alist)))
+        (delete-overlay registered))
+      (let ((ol (make-overlay (point-min) (point-max) nil t)))
+        (overlay-put ol 'pdf-view t)
+        (overlay-put ol 'window window)
+        (image-mode-window-put 'overlay ol window)
+        ol))))
+
 (defun pdf-view-display-image (image page &optional window inhibit-slice-p)
   ;; TODO: write documentation!
   (if pdf-view-roll-minor-mode
       (pdf-roll-display-image
        image page (or window (selected-window)) inhibit-slice-p)
-    (let ((ol (pdf-view-current-overlay window)))
-      (when (window-live-p (overlay-get ol 'window))
+    (let* ((window (or window
+                       (and (eq (current-buffer) (window-buffer))
+                            (selected-window))))
+           (ol (and window (pdf-view--window-overlay window))))
+      (when (and ol (window-live-p (overlay-get ol 'window)))
         (let* ((size (image-size image t))
                (slice (if (not inhibit-slice-p)
                           (pdf-view-current-slice window)))
@@ -1331,7 +1377,7 @@ If WINDOW is t, redisplay pages in all windows."
       ;; `window' property is only effective if its value is a window).
       (cl-assert (eq t (car winprops)))
       (delete-overlay ol))
-    (image-mode-window-put 'overlay ol)
+    (image-mode-window-put 'overlay ol winprops)
     ;; Clean up some overlays.
     (dolist (ov (overlays-in (point-min) (point-max)))
       (when (and (windowp (overlay-get ov 'window))
