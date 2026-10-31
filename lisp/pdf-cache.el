@@ -479,6 +479,9 @@ Used solely in `pdf-cache--prefetch-start'.")
              (not isearch-mode)
              (null pdf-cache--prefetch-pages)
              (eq (window-buffer) buffer)
+             ;; A window of a frame just made by emacsclient may not
+             ;; have a page yet.  The timer repeats, so skip this time.
+             (pdf-view-current-page)
              (fboundp pdf-cache-prefetch-pages-function))
     (let* ((pdf-cache--prefetch-started-p t)
            (pages (funcall pdf-cache-prefetch-pages-function)))
