@@ -38,8 +38,8 @@
 ;;   exit status and the page count of the result, and only then
 ;;   renames it over the original, so a failure leaves the file as it
 ;;   was,
-;; - keeps a copy of the previous version, which `pdf-pages-undo'
-;;   restores, and
+;; - keeps a copy of the previous version, which `pdf-undo'
+;;   restores, in `pdf-undo-backup-directory', and
 ;; - reverts the buffer, which makes the epdfinfo server reopen the
 ;;   new file.
 ;;
@@ -52,6 +52,7 @@
 (require 'pdf-view)
 (require 'pdf-info)
 (require 'pdf-util)
+(require 'pdf-undo)
 (require 'cl-lib)
 (require 'subr-x)
 
@@ -81,9 +82,9 @@ absolute file name.  qpdf 8.4 or later is required."
   "Whether to ask before an operation changes the visited PDF file.
 
 If t, ask before every change.  If `destructive', ask only before
-operations that remove content: deleting pages and
-`pdf-pages-undo'.  If nil, never ask.  Every change can be
-reverted with `pdf-pages-undo' regardless.
+operations that remove content: deleting pages and `pdf-undo'.  If
+nil, never ask.  Every change can be reverted with `pdf-undo'
+regardless.
 
 Extracting pages into a new file never asks, except before
 overwriting an existing file."
@@ -103,22 +104,6 @@ and multi-line formatting are ignored.  When nil, the
 appearances are kept as they are and fields with out-of-date
 appearances stay interactive instead of being flattened."
   :type 'boolean)
-
-(defcustom pdf-pages-undo-limit 10
-  "How many previous versions of a file `pdf-pages-undo' can restore.
-
-The previous versions are copies of the whole file, kept in
-`pdf-pages-backup-directory'."
-  :type 'integer)
-
-(defcustom pdf-pages-backup-directory nil
-  "Directory for the copies that `pdf-pages-undo' restores.
-
-If nil, a directory below variable `temporary-file-directory' is used,
-which is deleted when Emacs exits.  If a directory is given, the
-copies are kept there and outlive the Emacs session."
-  :type '(choice (const :tag "Temporary, deleted on exit" nil)
-                 directory))
 
 (defcustom pdf-pages-minor-mode-map-prefix (kbd "C-c C-o")
   "The prefix to use for `pdf-pages-minor-mode-map'.
@@ -406,34 +391,6 @@ needed, or nil."
 ;; * Checks
 ;; * ================================================================== *
 
-(defun pdf-pages--assert-file (&optional read-only)
-  "Check that the current buffer can be worked on and return its file.
-
-The buffer must be a `pdf-view-mode' buffer visiting a regular,
-local, uncompressed PDF file, which must be writable unless
-READ-ONLY is non-nil.  Return the file's true name."
-  (unless (derived-mode-p 'pdf-view-mode)
-    (user-error "Not in a PDF buffer"))
-  (when (derived-mode-p 'pdf-virtual-view-mode)
-    (user-error "Page operations do not work on virtual PDF buffers"))
-  (let ((file (buffer-file-name)))
-    (unless file
-      (user-error "Buffer `%s' is not visiting a file; page operations \
-need a PDF file on disk" (buffer-name)))
-    (when (or (file-remote-p file)
-              pdf-view--buffer-file-name
-              (not (file-regular-p file)))
-      (user-error "`%s' is not a local PDF file (remote, compressed or in \
-an archive); page operations need a plain file on disk"
-                  (abbreviate-file-name file)))
-    (setq file (file-truename file))
-    (unless (or read-only
-                (and (file-writable-p file)
-                     (file-writable-p (file-name-directory file))))
-      (user-error "`%s' or its directory is not writable"
-                  (abbreviate-file-name file)))
-    file))
-
 (defun pdf-pages--assert-saved ()
   "Make sure the buffer has no unsaved changes and matches its file.
 
@@ -471,88 +428,27 @@ a `user-error' if the answer is no."
 ;; * Undo
 ;; * ================================================================== *
 
-(defvar pdf-pages--undo-alist nil
-  "Alist of (FILE . ENTRIES) for `pdf-pages-undo'.
+;; The versions that `pdf-undo' restores are kept in `pdf-undo.el',
+;; which needs neither the qpdf program nor the page count checks
+;; below.  What is left here is the part that belongs to the page
+;; operations: the question, and the file being replaced rather than
+;; only changed in the server.
 
-ENTRIES is a list, most recent first, of plists with the keys
-:backup (a copy of FILE before the operation), :npages (its
-page count), :page (the page shown before it), :modtime (FILE's
-modification time after it) and :description.")
+(defun pdf-pages--undo-page-operation (file)
+  "Restore FILE as it was before the last page operation.
 
-(defvar pdf-pages--session-directory nil
-  "Temporary directory of this session's backups, if one was created.")
-
-(defun pdf-pages--backup-directory ()
-  "Return the directory for backups, creating it if needed."
-  (if pdf-pages-backup-directory
-      (let ((dir (expand-file-name pdf-pages-backup-directory)))
-        (make-directory dir t)
-        dir)
-    (unless (and pdf-pages--session-directory
-                 (file-directory-p pdf-pages--session-directory))
-      (setq pdf-pages--session-directory
-            (make-temp-file "pdf-pages-undo-" t))
-      (add-hook 'kill-emacs-hook #'pdf-pages--delete-session-directory))
-    pdf-pages--session-directory))
-
-(defun pdf-pages--delete-session-directory ()
-  "Delete this session's backup directory."
-  (when (and pdf-pages--session-directory
-             (file-directory-p pdf-pages--session-directory))
-    (delete-directory pdf-pages--session-directory t)))
-
-(defun pdf-pages--file-modtime (file)
-  "Return the modification time of FILE."
-  (file-attribute-modification-time (file-attributes file)))
-
-(defun pdf-pages--make-backup (file)
-  "Copy FILE to the backup directory and return the copy's name."
-  (let ((backup (make-temp-file
-                 (expand-file-name (concat (file-name-base file) "-")
-                                   (pdf-pages--backup-directory))
-                 nil ".pdf")))
-    (copy-file file backup t t)
-    backup))
-
-(defun pdf-pages--push-undo (file backup npages page description)
-  "Record BACKUP as FILE's version before DESCRIPTION.
-
-BACKUP has NPAGES pages, and PAGE was shown."
-  (let* ((cell (or (assoc file pdf-pages--undo-alist)
-                   (car (push (list file) pdf-pages--undo-alist))))
-         (entries (cons (list :backup backup
-                              :npages npages
-                              :page page
-                              :modtime (pdf-pages--file-modtime file)
-                              :description description)
-                        (cdr cell))))
-    (when (> (length entries) (max 0 pdf-pages-undo-limit))
-      (dolist (old (nthcdr (max 0 pdf-pages-undo-limit) entries))
-        (ignore-errors (delete-file (plist-get old :backup))))
-      (setq entries (cl-subseq entries 0 (max 0 pdf-pages-undo-limit))))
-    (setcdr cell entries)))
-
-(defun pdf-pages-undo ()
-  "Restore the version of the file before the last page operation.
-
-Only operations of this Emacs session can be undone, up to
-`pdf-pages-undo-limit' of them."
-  (interactive)
-  (let* ((file (pdf-pages--assert-file))
-         (cell (assoc file pdf-pages--undo-alist))
-         (entry (cadr cell)))
-    (unless entry
-      (user-error "No page operation to undo for `%s'"
-                  (abbreviate-file-name file)))
-    (pdf-pages--assert-saved)
-    (unless (file-exists-p (plist-get entry :backup))
-      (setcdr cell nil)
+FILE is the true name of the file the current buffer visits, and
+`pdf-undo' found a version of it to restore."
+  (let ((entry (pdf-undo--entry file)))
+    (unless (and entry (file-exists-p (plist-get entry :backup)))
+      (pdf-undo--pop file)
       (error "The backup of `%s' is gone; cannot undo"
              (abbreviate-file-name file)))
-    (if (equal (pdf-pages--file-modtime file) (plist-get entry :modtime))
+    (if (equal (pdf-undo--file-modtime file) (plist-get entry :modtime))
         (pdf-pages--confirm t "Undo %s? " (plist-get entry :description))
       (unless (y-or-n-p (format "`%s' changed since %s; restore the version \
-before it anyway? " (abbreviate-file-name file) (plist-get entry :description)))
+before it anyway? " (abbreviate-file-name file)
+                              (plist-get entry :description)))
         (user-error "Undo cancelled")))
     (let ((backup (plist-get entry :backup))
           (temp (pdf-pages--make-temp-file file))
@@ -561,43 +457,21 @@ before it anyway? " (abbreviate-file-name file) (plist-get entry :description)))
           (progn
             (copy-file backup temp t t)
             (set-file-modes temp (file-modes file))
-            (pdf-pages--close-document)
+            (pdf-undo--close-document)
             (rename-file temp file t)
             (setq done t))
         (unless done
           (when (file-exists-p temp)
             (delete-file temp))))
-      (setcdr cell (cddr cell))
+      (pdf-undo--pop file)
       (delete-file backup)
-      (pdf-pages--revert (plist-get entry :npages) (plist-get entry :page))
+      (pdf-undo--revert (plist-get entry :npages) (plist-get entry :page))
       (message "Undid %s" (plist-get entry :description)))))
-
 
 
 ;; * ================================================================== *
 ;; * Changing the visited file
 ;; * ================================================================== *
-
-(defun pdf-pages--close-document ()
-  "Close the document in the epdfinfo server, if it is running."
-  (when (pdf-info-running-p)
-    (ignore-errors (pdf-info-close))))
-
-(defun pdf-pages--revert (npages page)
-  "Revert the buffer to a file of NPAGES pages, then show PAGE.
-
-Reverting closes the document in the epdfinfo server, so the next
-request opens the new file."
-  (let ((page (max 1 (min page npages))))
-    ;; Point every window at an existing page before the revert
-    ;; redisplays them.
-    (dolist (win (get-buffer-window-list nil nil t))
-      (setf (pdf-view-current-page win)
-            (if (eq win (selected-window))
-                page
-              (max 1 (min (or (pdf-view-current-page win) 1) npages)))))
-    (pdf-view-revert-buffer nil t)
-    (pdf-view-goto-page page)))
 
 (defun pdf-pages--modify (description npages page args &optional destructive)
   "Rewrite the visited file with qpdf and revert the buffer.
@@ -607,25 +481,25 @@ NPAGES is the expected page count of the result, PAGE the page
 to show afterwards, and ARGS the qpdf arguments after the input
 file.  DESTRUCTIVE non-nil means the operation removes content,
 see `pdf-pages-confirm'.  The previous version is kept for
-`pdf-pages-undo'."
-  (let* ((file (pdf-pages--assert-file))
+`pdf-undo'."
+  (let* ((file (pdf-undo--assert-file))
          (old-page (pdf-pages--current-page))
          (old-npages (pdf-cache-number-of-pages))
          backup done)
     (pdf-pages--assert-saved)
     (pdf-pages--confirm destructive "%s? " (pdf-pages--capitalize description))
-    (setq backup (pdf-pages--make-backup file))
+    (setq backup (pdf-undo--make-backup file))
     (unwind-protect
         (progn
           (pdf-pages--write file file npages args
-                            #'pdf-pages--close-document)
+                            #'pdf-undo--close-document)
           (setq done t))
       (unless done
         (delete-file backup)))
-    (pdf-pages--push-undo file backup old-npages old-page description)
-    (pdf-pages--revert npages page)
+    (pdf-undo--push file backup old-npages old-page description)
+    (pdf-undo--revert npages page)
     (message "Done: %s (%s to undo)" description
-             (substitute-command-keys "\\[pdf-pages-undo]"))))
+             (substitute-command-keys "\\[pdf-undo]"))))
 
 
 
@@ -636,8 +510,8 @@ see `pdf-pages-confirm'.  The previous version is kept for
 (defun pdf-pages--prepare (&optional read-only)
   "Check the buffer before reading a command's arguments.
 
-See `pdf-pages--assert-file' for READ-ONLY."
-  (pdf-pages--assert-file read-only)
+See `pdf-undo--assert-file' for READ-ONLY."
+  (pdf-undo--assert-file read-only)
   (pdf-pages--assert-saved))
 
 (defun pdf-pages--check-pages (pages npages)
@@ -656,7 +530,7 @@ deleted one."
   (interactive
    (progn (pdf-pages--prepare)
           (list (pdf-pages-read-pages "Delete pages" current-prefix-arg))))
-  (pdf-pages--assert-file)
+  (pdf-undo--assert-file)
   (let* ((npages (pdf-cache-number-of-pages))
          (pages (sort (delete-dups (copy-sequence pages)) #'<))
          (keep (cl-remove-if (lambda (p) (memq p pages))
@@ -682,7 +556,7 @@ page range.  Afterwards, show the first moved page."
      (pdf-pages--prepare)
      (let ((pages (pdf-pages-read-pages "Move pages" current-prefix-arg)))
        (list pages (pdf-pages-read-position pages)))))
-  (pdf-pages--assert-file)
+  (pdf-undo--assert-file)
   (let* ((npages (pdf-cache-number-of-pages))
          (pages (delete-dups (copy-sequence pages)))
          (rest (cl-remove-if (lambda (p) (memq p pages))
@@ -716,7 +590,7 @@ prefix argument N rotates N pages starting at it, and
            (if (consp current-prefix-arg)
                (pdf-pages-read-angle)
              90))))
-  (pdf-pages--assert-file)
+  (pdf-undo--assert-file)
   (let ((npages (pdf-cache-number-of-pages))
         (pages (sort (delete-dups (copy-sequence pages)) #'<))
         (angle (and (integerp angle) (mod angle 360))))
@@ -778,7 +652,7 @@ password is supported."
 first): " (pdf-cache-number-of-pages))
                           (pdf-pages--current-page))
              range))))
-  (pdf-pages--assert-file)
+  (pdf-undo--assert-file)
   (let* ((npages (pdf-cache-number-of-pages))
          (file (expand-file-name file))
          (file-pages (or file-pages "1-z"))
@@ -811,7 +685,7 @@ FILE-PAGES and the interactive use are as in
        (list file
              (when current-prefix-arg
                (pdf-pages--read-file-pages file))))))
-  (pdf-pages--assert-file)
+  (pdf-undo--assert-file)
   (pdf-pages-insert-file file (pdf-cache-number-of-pages) file-pages))
 
 (defun pdf-pages-extract (pages file)
@@ -833,7 +707,7 @@ Return FILE's buffer."
                                              arg
                                            '(4)))))
        (list pages (pdf-pages-read-extract-file pages)))))
-  (let* ((source (pdf-pages--assert-file t))
+  (let* ((source (pdf-undo--assert-file t))
          (npages (pdf-cache-number-of-pages))
          (file (expand-file-name file))
          (buffer (find-buffer-visiting file)))
@@ -899,7 +773,7 @@ are generated for them, see `pdf-pages-flatten-generate-appearances'.
 This works on the whole document and needs the qpdf program,
 version 11.8 or later, see `pdf-pages-qpdf-program'.  The
 previous version of the file is kept and can be restored with
-`pdf-pages-undo'."
+`pdf-undo'."
   (interactive)
   (unless (pdf-pages--qpdf-version-at-least '(11 8))
     (error "Flattening needs the qpdf program version 11.8 or later, \
@@ -935,7 +809,7 @@ not %s; see `pdf-pages-qpdf-program'"
     (define-key smap "i" #'pdf-pages-insert-file)
     (define-key smap "a" #'pdf-pages-append-file)
     (define-key smap "f" #'pdf-pages-flatten-annotations)
-    (define-key smap "u" #'pdf-pages-undo)
+    (define-key smap "u" #'pdf-undo)
     kmap)
   "Keymap used for `pdf-pages-minor-mode'.")
 
@@ -951,7 +825,7 @@ not %s; see `pdf-pages-qpdf-program'"
     ["Append PDF File..." pdf-pages-append-file]
     "--"
     ["Flatten Annotations and Form Fields" pdf-pages-flatten-annotations]
-    ["Undo Last Page Operation" pdf-pages-undo]))
+    ["Undo Last Change" pdf-undo]))
 
 ;;;###autoload
 (define-minor-mode pdf-pages-minor-mode
@@ -962,7 +836,7 @@ The commands change the visited file with the qpdf program, see
 `pdf-pages-qpdf-program'.  They work on the current page, on N
 pages starting at it with a numeric prefix argument N, or on a
 page range read with \\[universal-argument].  Every change can be
-reverted with `pdf-pages-undo'.
+reverted with `pdf-undo'.
 
 \\{pdf-pages-minor-mode-map}"
   :group 'pdf-pages)

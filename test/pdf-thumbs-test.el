@@ -21,8 +21,8 @@ buffer and `file' to its file."
             (file (expand-file-name "test.pdf" ,dir))
             (pdf-thumbs-columns 4)
             (pdf-pages-confirm nil)
-            (pdf-pages--undo-alist nil)
-            (pdf-pages-backup-directory (expand-file-name "backups" ,dir)))
+            (pdf-undo--alist nil)
+            (pdf-undo-backup-directory (expand-file-name "backups" ,dir)))
        (copy-file "test.pdf" file)
        (unwind-protect
            (save-current-buffer
