@@ -83,9 +83,24 @@ of the corresponding synctex database or nil, if it was unable to
 locate it."
   :type 'hook)
 
+(defun pdf-sync--when-synctex (binding)
+  "Return BINDING if the current PDF has a SyncTeX database.
+
+Used as a key binding filter, so that double clicking in a PDF
+without one selects a word, see `pdf-view-mouse-set-region'."
+  (and (ignore-errors
+         (pdf-sync-locate-synctex-file (pdf-view-buffer-file-name)))
+       binding))
+
 (defvar pdf-sync-minor-mode-map
   (let ((kmap (make-sparse-keymap)))
-    (define-key kmap [double-mouse-1] #'pdf-sync-backward-search-mouse)
+    ;; Double click does a backward search in documents made with
+    ;; SyncTeX and leaves the word selection of `pdf-view-mode' alone.
+    (define-key kmap [double-down-mouse-1]
+      '(menu-item "" ignore :filter pdf-sync--when-synctex))
+    (define-key kmap [double-mouse-1]
+      '(menu-item "" pdf-sync-backward-search-mouse
+                  :filter pdf-sync--when-synctex))
     (define-key kmap [C-mouse-1] #'pdf-sync-backward-search-mouse)
     kmap))
 
@@ -117,7 +132,9 @@ setting `TeX-source-correlate-method' to `synctex' (before AUCTeX
 is loaded) and enabling `TeX-source-correlate-mode'.
 
 Then \\[pdf-sync-backward-search-mouse] in the PDF buffer will
-open the corresponding TeX location.
+open the corresponding TeX location.  So will a double click, if
+the PDF has a SyncTeX database; otherwise a double click selects
+a word.
 
 If AUCTeX is your preferred tex-mode, this library arranges to
 bind `pdf-sync-forward-display-pdf-key' (the default is `C-c C-g')

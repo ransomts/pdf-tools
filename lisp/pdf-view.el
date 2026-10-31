@@ -275,6 +275,18 @@ This variable is set in `pdf-view-mouse-set-region' and used in
 `pdf-view-mouse-extend-region' to determine the right choice
 regarding display of the region in the later function.")
 
+;; Like `pdf-view--have-rectangle-region', this describes the region
+;; last made and outlives its deactivation, because commands such as
+;; `pdf-annot-add-markup-annotation' deactivate the region in their
+;; interactive spec and use the style afterwards.
+(defvar-local pdf-view--region-selection-style nil
+  "The selection style of the active region, or nil.
+
+Nil means the region follows `pdf-view-selection-style'.  This is
+non-nil for regions made with a double or triple click, which
+select by `word' resp. `line' whatever the default style is.  See
+`pdf-view-region-selection-style'.")
+
 (defvar-local pdf-view--buffer-file-name nil
   "Local copy of remote file or nil.")
 
@@ -299,6 +311,17 @@ regarding display of the region in the later function.")
 (defun pdf-view-active-region-p nil
   "Return t if there are active regions."
   (not (null pdf-view-active-region)))
+
+(defun pdf-view-region-selection-style ()
+  "Return the selection style of the active region.
+
+This is the style to use with the edges of
+`pdf-view-active-region', e.g. as the SELECTION-STYLE argument of
+`pdf-info-gettext' and `pdf-info-getselection'.  It is
+`pdf-view-selection-style', unless the region was made with a
+double click (`word') or a triple click (`line')."
+  (or pdf-view--region-selection-style
+      pdf-view-selection-style))
 
 (defmacro pdf-view-assert-active-region ()
   "Signal an error if there are no active regions."
@@ -364,6 +387,10 @@ regarding display of the region in the later function.")
     (define-key map (kbd "g")         'revert-buffer)
     ;; Region
     (define-key map [down-mouse-1] 'pdf-view-mouse-set-region)
+    (define-key map [double-down-mouse-1] 'pdf-view-mouse-set-region)
+    (define-key map [triple-down-mouse-1] 'pdf-view-mouse-set-region)
+    (define-key map [S-down-mouse-1] 'pdf-view-mouse-set-region-end)
+    (define-key map [S-mouse-1] 'ignore)
     (define-key map [M-down-mouse-1] 'pdf-view-mouse-set-region-rectangle)
     (define-key map [C-down-mouse-1] 'pdf-view-mouse-extend-region)
     (define-key map [remap kill-region] 'pdf-view-kill-ring-save)
@@ -1550,6 +1577,11 @@ Deactivate the region if DEACTIVATE-P is non-nil."
                                         selection-style)
   "Select a region of text using the mouse with mouse event EVENT.
 
+Dragging selects the text between the start and the end of the
+drag.  A single click without dragging deselects.  A double click
+selects the word at EVENT and a triple click the line; dragging
+after such a click extends the selection by words resp. lines.
+
 Allow for stacking of regions, if ALLOW-EXTEND-P is non-nil.
 
 Create a rectangular region, if RECTANGLE-P is non-nil.
@@ -1559,10 +1591,11 @@ which is one of `glyph', `word', or `line'.
 
 Stores the region in `pdf-view-active-region'."
   (interactive "@e")
-  (setq pdf-view--have-rectangle-region rectangle-p)
   (unless (and (eventp event)
                (mouse-event-p event))
     (signal 'wrong-type-argument (list 'mouse-event-p event)))
+  (unless (or selection-style rectangle-p)
+    (setq selection-style (pdf-view--click-selection-style event)))
   (unless (and allow-extend-p
                (or (null (get this-command 'pdf-view-region-window))
                    (equal (get this-command 'pdf-view-region-window)
@@ -1578,17 +1611,16 @@ Stores the region in `pdf-view-active-region'."
                   (setq begin-inside-image-p nil)
                   (posn-x-y pos)))
          (abs-begin (posn-x-y pos))
-         (page (if pdf-view-roll-minor-mode
-                   (/ (+ 3 (posn-point pos)) 4)
-                 (pdf-view-current-page)))
+         (page (pdf-view--posn-page pos))
          (margin (frame-char-height))
+         (style-override selection-style)
          (selection-style (or selection-style pdf-view-selection-style))
          pdf-view-continuous
          region)
     ;; Regions are per page; don't stack them across pages.
     (unless (eql page (car pdf-view-active-region))
       (pdf-view-deactivate-region))
-    (when (pdf-util-track-mouse-dragging (event 0.05)
+    (if (not (pdf-util-track-mouse-dragging (event 0.05)
             (let* ((pos (event-start event))
                    (end (posn-object-x-y pos))
                    (end-inside-image-p
@@ -1652,17 +1684,58 @@ Stores the region in `pdf-view-active-region'."
                         (pdf-roll-scroll-backward
                          (min margin
                               (or (nth 2 (pos-visible-in-window-p (posn-point pos) window t)) 0)))))
-                    (pdf-util-scroll-to-edges iregion))))))
-      (setq pdf-view-active-region
-            (cons page (append (cdr pdf-view-active-region)
-                               (list region))))
-      (pdf-view--push-mark))))
+                    (pdf-util-scroll-to-edges iregion)))))))
+        ;; A click without dragging.  A double or triple click
+        ;; selects the word or line at EVENT, any other click just
+        ;; deselects.
+        (when (and style-override
+                   (not rectangle-p)
+                   begin-inside-image-p)
+          (pdf-view--add-region
+           page
+           (pdf-util-scale-pixel-to-relative
+            (list (car begin) (cdr begin) (car begin) (cdr begin)))
+           nil style-override)
+          (pdf-view-display-region nil nil style-override))
+      (pdf-view--add-region page region rectangle-p style-override))))
+
+(defun pdf-view--click-selection-style (event)
+  "Return the selection style implied by the click count of EVENT.
+
+That is `word' for a double click, `line' for a triple click and
+nil otherwise."
+  (let ((count (event-click-count event)))
+    (cond ((>= count 3) 'line)
+          ((= count 2) 'word))))
+
+(defun pdf-view--posn-page (posn)
+  "Return the page displayed at mouse position POSN."
+  (if pdf-view-roll-minor-mode
+      (/ (+ 3 (posn-point posn)) 4)
+    (pdf-view-current-page)))
+
+(defun pdf-view--add-region (page edges &optional rectangle-p selection-style)
+  "Add EDGES on PAGE to the active region.
+
+EDGES are relative; they are appended to the region's edges if it
+is on PAGE, otherwise they replace it.  RECTANGLE-P and
+SELECTION-STYLE are recorded as the way the region is displayed
+and read, see `pdf-view-region-selection-style'."
+  (setq pdf-view-active-region
+        (cons page (append (and (eql page (car pdf-view-active-region))
+                                (cdr pdf-view-active-region))
+                           (list edges)))
+        pdf-view--have-rectangle-region rectangle-p
+        pdf-view--region-selection-style selection-style)
+  (pdf-view--push-mark))
 
 (defun pdf-view-mouse-extend-region (event)
   "Extend the currently active region with mouse event EVENT."
   (interactive "@e")
   (pdf-view-mouse-set-region
-   event t pdf-view--have-rectangle-region))
+   event t pdf-view--have-rectangle-region
+   (and (pdf-view-active-region-p)
+        pdf-view--region-selection-style)))
 
 (defun pdf-view-mouse-set-region-rectangle (event)
   "Like `pdf-view-mouse-set-region' but displays as a rectangle.
@@ -1674,11 +1747,66 @@ This is more useful for commands like
   (interactive "@e")
   (pdf-view-mouse-set-region event nil t))
 
+(defun pdf-view-mouse-set-region-end (event)
+  "Extend or shrink the active region to the position of EVENT.
+
+The region keeps its start and its selection style, so after a
+double click this extends the selection by words.  Dragging keeps
+moving the end.  If there is no active region on the clicked
+page, start a new one like `pdf-view-mouse-set-region'."
+  (interactive "@e")
+  (let* ((window (selected-window))
+         (pos (event-start event))
+         (page (pdf-view--posn-page pos))
+         (edges (car (last (cdr pdf-view-active-region))))
+         (rectangle-p pdf-view--have-rectangle-region))
+    (if (not (and edges
+                  (posn-image pos)
+                  (eql page (car pdf-view-active-region))))
+        (pdf-view-mouse-set-region event)
+      (let* ((others (butlast (cdr pdf-view-active-region)))
+             (end (pdf-util-scale-pixel-to-relative (posn-object-x-y pos)))
+             ;; A rectangle only stores its corners, so keep the one
+             ;; opposite to the click fixed.
+             (anchor (if rectangle-p
+                         (cons (if (< (car end) (/ (+ (nth 0 edges) (nth 2 edges)) 2))
+                                   (nth 2 edges)
+                                 (nth 0 edges))
+                               (if (< (cdr end) (/ (+ (nth 1 edges) (nth 3 edges)) 2))
+                                   (nth 3 edges)
+                                 (nth 1 edges)))
+                       (cons (nth 0 edges) (nth 1 edges))))
+             (set-end
+              (lambda (end)
+                (setq pdf-view-active-region
+                      (cons page
+                            (append others
+                                    (list
+                                     (if rectangle-p
+                                         (list (min (car anchor) (car end))
+                                               (min (cdr anchor) (cdr end))
+                                               (max (car anchor) (car end))
+                                               (max (cdr anchor) (cdr end)))
+                                       (list (car anchor) (cdr anchor)
+                                             (car end) (cdr end)))))))
+                (pdf-view-display-region nil rectangle-p))))
+        (funcall set-end end)
+        (pdf-util-track-mouse-dragging (event 0.05)
+          (let ((pos (event-start event)))
+            (when (and (eq window (posn-window pos))
+                       (posn-image pos)
+                       (eql page (pdf-view--posn-page pos)))
+              (funcall set-end (pdf-util-scale-pixel-to-relative
+                                (posn-object-x-y pos))))))
+        (pdf-view--push-mark)))))
+
 (defun pdf-view-display-region (&optional region rectangle-p selection-style)
   ;; TODO: write documentation!
   (unless region
     (pdf-view-assert-active-region)
     (setq region pdf-view-active-region))
+  (unless selection-style
+    (setq selection-style (pdf-view-region-selection-style)))
   (let ((colors (pdf-util-face-colors
                  (if rectangle-p 'pdf-view-rectangle 'pdf-view-region)
                  (bound-and-true-p pdf-view-dark-minor-mode)))
@@ -1709,7 +1837,8 @@ This is more useful for commands like
   (interactive)
   (pdf-view-deactivate-region)
   (setq pdf-view-active-region
-        (cons (pdf-view-current-page) (list (list 0 0 1 1))))
+        (cons (pdf-view-current-page) (list (list 0 0 1 1)))
+        pdf-view--region-selection-style nil)
   (pdf-view--push-mark)
   (pdf-view-display-region))
 
@@ -1721,7 +1850,7 @@ This is more useful for commands like
      (pdf-info-gettext
       (car pdf-view-active-region)
       edges
-      pdf-view-selection-style))
+      (pdf-view-region-selection-style)))
    (cdr pdf-view-active-region)))
 
 (defun pdf-view-extract-region-image (regions &optional page size
@@ -1804,6 +1933,7 @@ the selection styles."
                     'glyph))
     (message "Setting selection style to `%s'." style))
   (pdf-view-deactivate-region)
+  (setq pdf-view--region-selection-style nil)
   (setq-local pdf-view-selection-style style))
 
 

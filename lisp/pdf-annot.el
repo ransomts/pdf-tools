@@ -1154,7 +1154,7 @@ Return the new annotation."
              (> (length edges) 1))
     (error "Edges argument should be a single edge-list for %s annotations"
            type))
-  (let* ((selection-style pdf-view-selection-style)
+  (let* ((selection-style (pdf-view-region-selection-style))
          (shape-p (memq type '(square circle line stamp)))
          (non-markup (pcase type
                        ('text t)
