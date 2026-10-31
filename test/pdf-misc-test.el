@@ -632,5 +632,193 @@ Creator: LaTeX with hyperref package\n"))
             (kill-buffer edit))))
       (kill-buffer "*PDF-Metadata*"))))
 
+;; * ================================================================== *
+;; * Attachments
+;; * ================================================================== *
+;;
+;; The attachment commands rewrite the visited file with the qpdf
+;; program, so every test works on a copy in a temporary directory, see
+;; `pdf-misc-test-with-copy'.  A missing qpdf skips them.
+
+(defun pdf-misc-test-file-bytes (file)
+  "Return the bytes of FILE."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally file)
+    (buffer-string)))
+
+(defun pdf-misc-test-write-file (file contents)
+  "Write CONTENTS to FILE and return its name."
+  (with-temp-file file
+    (insert contents))
+  file)
+
+(defun pdf-misc-test-attachment-names (attachments)
+  "Return the file names of ATTACHMENTS."
+  (mapcar (lambda (attachment)
+            (cdr (assq 'filename attachment)))
+          attachments))
+
+(defun pdf-misc-test-dired-names ()
+  "Return the sorted names of the files listed in the current Dired buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (let (names)
+      (while (not (eobp))
+        (let ((name (ignore-errors (dired-get-filename nil t))))
+          (when (and name
+                     (not (member (file-name-nondirectory name) '("." ".."))))
+            (push (file-name-nondirectory name) names)))
+        (forward-line 1))
+      (sort names #'string<))))
+
+(ert-deftest pdf-misc-attachments-dired ()
+  "Both attachments are extracted, and equal names are made unique."
+  (skip-unless (executable-find "qpdf"))
+  (pdf-misc-test-with-copy file "test.pdf"
+    (pdf-misc-test-with-clean-state
+      (let* ((dir (file-name-directory file))
+             (dedicated (pdf-util-dedicated-directory))
+             (rubric (pdf-misc-test-write-file
+                      (expand-file-name "rubric.md" dir) "# Rubric\n")))
+        ;; The same file twice: the second attachment needs a new name.
+        (pdf-misc-add-attachment rubric)
+        (pdf-misc-add-attachment rubric)
+        (let ((dired-buffer (pdf-misc-attachments-dired)))
+          (should (buffer-live-p dired-buffer))
+          (with-current-buffer dired-buffer
+            (should (derived-mode-p 'dired-mode))
+            ;; The directory is named after the document, in the
+            ;; buffer's dedicated directory.
+            (should (file-in-directory-p default-directory dedicated))
+            (should (equal (pdf-misc-test-dired-names)
+                           '("rubric-1.md" "rubric.md")))
+            (dolist (name (pdf-misc-test-dired-names))
+              (let ((extracted (expand-file-name name default-directory)))
+                (should (file-exists-p extracted))
+                (with-temp-buffer
+                  (insert-file-contents extracted)
+                  (should (equal (buffer-string) "# Rubric\n")))))))))))
+
+(ert-deftest pdf-misc-add-attachment ()
+  "The attachment is in the file and the rest of the document is unchanged."
+  (skip-unless (executable-find "qpdf"))
+  (pdf-misc-test-with-copy file "test.pdf"
+    (let* ((rubric (pdf-misc-test-write-file
+                    (expand-file-name "rubric.md"
+                                      (file-name-directory file))
+                    "# Rubric\n"))
+           (npages (pdf-cache-number-of-pages))
+           (text (pdf-info-gettext 1 '(0 0 1 1)))
+           (metadata (pdf-info-metadata)))
+      (let ((attachments (pdf-misc-add-attachment rubric "The rubric")))
+        (should (equal (pdf-misc-test-attachment-names attachments)
+                       '("rubric.md")))
+        (should (equal (cdr (assq 'description (car attachments)))
+                       "The rubric")))
+      ;; The buffer was reverted, so its attachment list is fresh ...
+      (should (equal (pdf-misc-test-attachment-names (pdf-info-getattachments))
+                     '("rubric.md")))
+      (should-not (buffer-modified-p))
+      ;; ... and the rest of the document is untouched.
+      (should (= (pdf-cache-number-of-pages) npages))
+      (should (equal (pdf-info-gettext 1 '(0 0 1 1)) text))
+      (should (equal (cdr (assq 'title (pdf-info-metadata)))
+                     (cdr (assq 'title metadata))))
+      (should (equal (cdr (assq 'producer (pdf-info-metadata)))
+                     (cdr (assq 'producer metadata))))
+      ;; A fresh look at the file on disk agrees.
+      (pdf-info-close)
+      (should (equal (pdf-misc-test-attachment-names (pdf-info-getattachments))
+                     '("rubric.md")))
+      ;; Without a description there is none.  The second attachment
+      ;; keeps the file's name for readers; only its key is unique.
+      (pdf-misc-add-attachment rubric)
+      (let ((second (cl-find-if
+                     (lambda (a)
+                       (and (equal (cdr (assq 'filename a)) "rubric.md")
+                            (null (cdr (assq 'description a)))))
+                     (pdf-info-getattachments))))
+        (should second)))))
+
+(ert-deftest pdf-misc-add-attachment-undoable ()
+  "The version before the change is kept for `pdf-undo'."
+  (skip-unless (executable-find "qpdf"))
+  (pdf-misc-test-with-copy file "test.pdf"
+    (let* ((dir (file-name-directory file))
+           (true (file-truename file))
+           (pdf-undo--alist nil)
+           (pdf-undo-backup-directory (expand-file-name "backups" dir))
+           (pdf-pages-confirm nil)
+           (bytes (pdf-misc-test-file-bytes file))
+           (rubric (pdf-misc-test-write-file
+                    (expand-file-name "rubric.md" dir) "# Rubric\n")))
+      (pdf-misc-add-attachment rubric)
+      (should (equal (pdf-misc-test-attachment-names (pdf-info-getattachments))
+                     '("rubric.md")))
+      (should (cdr (assoc true pdf-undo--alist)))
+      (pdf-undo)
+      ;; The file is exactly the version before the attachments, and the
+      ;; server sees no attachment again.
+      (should (equal (pdf-misc-test-file-bytes file) bytes))
+      (should-not (buffer-modified-p))
+      (should-not (pdf-info-getattachments))
+      (should-not (cdr (assoc true pdf-undo--alist)))
+      (pdf-info-close)
+      (should-not (pdf-misc--attachment-keys file)))))
+
+(ert-deftest pdf-misc-remove-attachment ()
+  (skip-unless (executable-find "qpdf"))
+  (pdf-misc-test-with-copy file "test.pdf"
+    (let* ((dir (file-name-directory file))
+           (npages (pdf-cache-number-of-pages)))
+      (dolist (name '("one.txt" "two.txt"))
+        (pdf-misc-add-attachment
+         (pdf-misc-test-write-file (expand-file-name name dir)
+                                   (format "%s\n" name))))
+      (should (equal (sort (pdf-misc--attachment-keys file) #'string<)
+                     '("one.txt" "two.txt")))
+      (let ((attachments (pdf-misc-remove-attachment "one.txt")))
+        (should (equal (pdf-misc-test-attachment-names attachments)
+                       '("two.txt"))))
+      (should (= (pdf-cache-number-of-pages) npages))
+      (should-error (pdf-misc-remove-attachment "nope.txt")
+                    :type 'user-error)
+      ;; The other attachment survived and the file is untouched.
+      (pdf-info-close)
+      (should (equal (pdf-misc-test-attachment-names (pdf-info-getattachments))
+                     '("two.txt"))))))
+
+(ert-deftest pdf-misc-add-attachment-modified-buffer ()
+  "An unsaved buffer is not written to unless the user saves it first."
+  (skip-unless (executable-find "qpdf"))
+  (pdf-misc-test-with-copy file "test.pdf"
+    (let ((rubric (pdf-misc-test-write-file
+                   (expand-file-name "rubric.md"
+                                     (file-name-directory file))
+                   "# Rubric\n"))
+          (bytes (pdf-misc-test-file-bytes file)))
+      (set-buffer-modified-p t)
+      (cl-letf (((symbol-function 'y-or-n-p)
+                 (lambda (&rest _) nil)))
+        (should-error (pdf-misc-add-attachment rubric) :type 'user-error))
+      (should (equal (pdf-misc-test-file-bytes file) bytes))
+      (should-not (pdf-misc--attachment-keys file)))))
+
+(ert-deftest pdf-misc-attachment-keys ()
+  "The C-c C-a map binds the document-level attachment commands."
+  (pdf-misc-test-with-pdf "test.pdf"
+    (require 'pdf-annot)
+    (let ((prefix pdf-annot-minor-mode-map-prefix))
+      (should (eq (lookup-key pdf-annot-minor-mode-map
+                              (vconcat prefix (kbd "A")))
+                  #'pdf-misc-attachments-dired))
+      (should (eq (lookup-key pdf-annot-minor-mode-map
+                              (vconcat prefix (kbd "+")))
+                  #'pdf-misc-add-attachment))
+      (should (eq (lookup-key pdf-annot-minor-mode-map
+                              (vconcat prefix (kbd "-")))
+                  #'pdf-misc-remove-attachment)))))
+
 (provide 'pdf-misc-test)
 ;;; pdf-misc-test.el ends here

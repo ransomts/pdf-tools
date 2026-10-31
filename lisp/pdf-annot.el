@@ -360,6 +360,12 @@ Setting this after the package was loaded has no effect."
     (define-key kmap pdf-annot-minor-mode-map-prefix smap)
     (define-key smap "l" #'pdf-annot-list-annotations)
     (define-key smap "a" #'pdf-annot-attachment-dired)
+    ;; Document-level attachments.  These commands live in pdf-misc,
+    ;; like the metadata commands, and sit next to the annotation-level
+    ;; attachments above.
+    (define-key smap "A" #'pdf-misc-attachments-dired)
+    (define-key smap "+" #'pdf-misc-add-attachment)
+    (define-key smap "-" #'pdf-misc-remove-attachment)
     (when (pdf-info-writable-annotations-p)
       (define-key smap "D" #'pdf-annot-delete)
       (define-key smap "t" #'pdf-annot-add-text-annotation)

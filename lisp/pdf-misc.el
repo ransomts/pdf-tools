@@ -24,6 +24,10 @@
 
 (require 'pdf-view)
 (require 'pdf-util)
+;; The qpdf helpers of the page operations are reused for document-level
+;; attachments, see the "Attachments" section below.
+(require 'pdf-pages)
+(require 'pdf-undo)
 (require 'imenu)
 (require 'subr-x)
 (require 'xml)
@@ -135,9 +139,22 @@
     ["Display Annotations" pdf-annot-list-annotations
      :help "List all annotations"
      :visible (bound-and-true-p pdf-annot-minor-mode)]
-    ["Display Attachments" pdf-annot-attachment-dired
-     :help "Display attachments in a dired buffer"
+    ["Display Annotation Attachments" pdf-annot-attachment-dired
+     :help "List the files attached to annotations in a dired buffer"
      :visible (featurep 'pdf-annot)]
+    ["List Document Attachments" pdf-misc-attachments-dired
+     :help "Extract the document's attachments and list them in a dired buffer"
+     :visible (featurep 'pdf-misc)]
+    ["Add Attachment..." pdf-misc-add-attachment
+     :help "Attach a file to the document with the qpdf program"
+     :visible (featurep 'pdf-misc)
+     :active (and (pdf-view-buffer-file-name)
+                  (file-writable-p (pdf-view-buffer-file-name)))]
+    ["Remove Attachment..." pdf-misc-remove-attachment
+     :help "Remove an attached file from the document with the qpdf program"
+     :visible (featurep 'pdf-misc)
+     :active (and (pdf-view-buffer-file-name)
+                  (file-writable-p (pdf-view-buffer-file-name)))]
     ["Display Metadata" pdf-misc-display-metadata
      :help "Display information about the document"
      :visible (featurep 'pdf-misc)]
@@ -713,6 +730,227 @@ by `pdf-misc-display-metadata', to the PDF buffer it describes."
                  (user-error "The PDF buffer of this metadata is gone")))
         (current-buffer)))))
 
+
+;; * ================================================================== *
+;; * Attachments
+;; * ================================================================== *
+;;
+;; A PDF can carry files, either attached to an individual annotation or
+;; to the document as a whole.  Poppler, and therefore the epdfinfo
+;; server, only reads them: the file names and contents come from
+;; `pdf-info-getattachments'.  Putting a file into the document or taking
+;; one out means rewriting it, which qpdf does.  The page operations in
+;; pdf-pages solved the same problem already, so their private helpers
+;; are called from here on purpose: they run qpdf, let it write the new
+;; version next to the original, check the result, replace the original
+;; only if that succeeded, and make the server reopen the new file.  The
+;; version before the change is kept for `pdf-undo', as for the page
+;; operations.
+;;
+;; The document-level attachments are a different collection from the
+;; files attached to annotations, which have their own cache in
+;; `pdf-annot-attachment-base-directory' and are listed by
+;; `pdf-annot-attachment-dired'.
+
+(defun pdf-misc--attachment-keys (file)
+  "Return the keys of the document-level attachments of the PDF FILE.
+
+The keys are the names the qpdf program uses to identify the
+attachments; they are not necessarily the file names they are
+displayed with.  Return nil if FILE has no attachments."
+  (let ((result (pdf-pages--call-qpdf
+                 (password-read-from-cache (pdf-pages--password-key file))
+                 "--list-attachments" file)))
+    (unless (pdf-pages--ok-p result)
+      (error "The qpdf program cannot list the attachments of `%s': %s"
+             (abbreviate-file-name file) (cdr result)))
+    (cl-loop for line in (split-string (cdr result) "\n" t)
+             when (string-match "\\`\\(.+\\) -> [0-9]+,[0-9]+\\'" line)
+             collect (match-string 1 line))))
+
+(defun pdf-misc--unique-attachment-name (name names)
+  "Return NAME, or a variant of it that is not in the list NAMES.
+
+A clash is resolved the way `pdf-annot-attachment-unique-filename'
+resolves it, by appending -1, -2 and so on before the extension,
+so that two attachments called rubric.md become rubric.md and
+rubric-1.md.  The empty string is taken as the name attachment."
+  (when (string-empty-p name)
+    (setq name "attachment"))
+  (let* ((sans-ext (file-name-sans-extension name))
+         (extension (file-name-extension name))
+         (unique name)
+         (i 0))
+    (while (member unique names)
+      (setq unique (format "%s-%d%s" sans-ext (cl-incf i)
+                           (if extension (concat "." extension) ""))))
+    unique))
+
+(defun pdf-misc--signature-fields-p ()
+  "Return non-nil if the current document has a signature field.
+
+Signing a PDF signs the bytes of the file, so any rewrite of the
+document makes the signature invalid, even if the signature itself
+is left alone."
+  (cl-some (lambda (page)
+             (cl-some (lambda (field)
+                        (eq (alist-get 'type field) 'signature))
+                      (pdf-info-formfields page)))
+           (number-sequence 1 (pdf-cache-number-of-pages))))
+
+(defun pdf-misc--confirm-signature-loss ()
+  "Ask before rewriting a signed document, which invalidates its signature.
+
+This is a question rather than a hard stop, since a reader may not
+care about the signature.  Answering no signals a `user-error'."
+  (when (pdf-misc--signature-fields-p)
+    (unless (y-or-n-p "Rewriting the file invalidates the document's \
+signature; continue? ")
+      (user-error "Attachment not changed: the signature stays valid"))))
+
+(defun pdf-misc--write-attachments (args description)
+  "Rewrite the visited PDF with qpdf ARGS and revert its buffer.
+
+DESCRIPTION describes the operation for the message the user sees.
+ARGS are the qpdf arguments after the input file, terminated by a
+\"--\" if they belong to an option group.  The original file is
+replaced only if qpdf succeeds, see `pdf-pages--write', whose page
+count check also makes sure no pages were lost.  The previous version
+is kept for `pdf-undo', as for the page operations.
+
+Return the document's attachment list after the change, as
+`pdf-info-getattachments' does."
+  (let* ((file (pdf-undo--assert-file))
+         (npages (pdf-cache-number-of-pages))
+         (page (pdf-pages--current-page))
+         backup done)
+    (pdf-pages--assert-saved)
+    (pdf-misc--confirm-signature-loss)
+    (setq backup (pdf-undo--make-backup file))
+    (unwind-protect
+        (progn
+          (pdf-pages--write file file npages args
+                            ;; The server may have the old file open.
+                            #'pdf-undo--close-document)
+          (setq done t))
+      (unless done
+        (delete-file backup)))
+    (pdf-undo--push file backup npages page description)
+    (pdf-undo--revert npages page)
+    (let ((attachments (pdf-info-getattachments)))
+      (when (called-interactively-p 'any)
+        (message "%s; the document has %s (%s to undo)" description
+                 (if attachments
+                     (format "%d attachment%s" (length attachments)
+                             (if (cdr attachments) "s" ""))
+                   "no attachments")
+                 (substitute-command-keys "\\[pdf-undo]")))
+      attachments)))
+
+(defun pdf-misc-attachments-dired (&optional regenerate-p)
+  "List the document-level attachments of the current PDF in Dired.
+
+Extract every attachment into a temporary directory named after
+the document -- the counterpart of
+`pdf-annot-attachment-dired', which lists the files attached to
+annotations -- and pop to a Dired buffer showing it, where
+\\<dired-mode-map>\\[dired-find-file] opens the file at point.  Two
+attachments whose names clash are made unique the way
+`pdf-annot-attachment-unique-filename' does it, so two attachments
+called rubric.md appear as rubric.md and rubric-1.md.
+
+If REGENERATE-P is non-nil, extract the files again even if they
+are already there; interactively it is non-nil if a prefix
+argument was given.  Return the Dired buffer."
+  (interactive (list current-prefix-arg))
+  (pdf-util-assert-pdf-buffer)
+  (let ((attachments (pdf-info-getattachments t))
+        names)
+    (unwind-protect
+        (progn
+          (unless attachments
+            (user-error "Document has no attachments"))
+          (let ((dir (pdf-util-expand-file-name "document-attachments")))
+            (make-directory dir t)
+            (dolist (attachment attachments)
+              (let* ((source (cdr (assq 'file attachment)))
+                     (name (pdf-misc--unique-attachment-name
+                            (or (cdr (assq 'filename attachment))
+                                "attachment")
+                            names))
+                     (target (expand-file-name name dir)))
+                (push name names)
+                (when (or regenerate-p
+                          (not (file-exists-p target)))
+                  (copy-file source target nil nil t t))))
+            (dired dir)))
+      ;; The extracted files were written by the server for us alone.
+      (dolist (attachment attachments)
+        (let ((source (cdr (assq 'file attachment))))
+          (when (and source (file-exists-p source))
+            (delete-file source)))))))
+
+(defun pdf-misc-add-attachment (file &optional description)
+  "Attach FILE to the visited PDF document with the qpdf program.
+
+DESCRIPTION is the description readers see for the attachment;
+nil, or the empty string, means none.  The attachment is named
+after FILE unless that name is taken, in which case a number is
+appended, so the same file can be attached twice.
+
+Rewriting the document invalidates a signature, so if it has a
+signature field, ask before going ahead.  Return the document's
+attachment list after the change, as `pdf-info-getattachments'
+does."
+  (interactive
+   (progn
+     (pdf-undo--assert-file)
+     (pdf-pages--assert-saved)
+     (list (read-file-name "Attach file: " nil nil t)
+           (let ((description (read-string "Description (optional): ")))
+             (unless (string-empty-p description)
+               description)))))
+  (let* ((document (pdf-undo--assert-file))
+         (attachment (expand-file-name file)))
+    (unless (file-regular-p attachment)
+      (user-error "`%s' is not a regular file"
+                  (abbreviate-file-name attachment)))
+    (let* ((keys (pdf-misc--attachment-keys document))
+           (key (pdf-misc--unique-attachment-name
+                 (file-name-nondirectory attachment) keys)))
+      (pdf-misc--write-attachments
+       (append (list "--add-attachment" attachment (concat "--key=" key))
+               (unless (string-empty-p (or description ""))
+                 (list (concat "--description=" description)))
+               (list "--"))
+       (format "Attached `%s' as `%s'"
+               (file-name-nondirectory attachment) key)))))
+
+(defun pdf-misc-remove-attachment (name)
+  "Remove the document-level attachment NAME from the visited PDF.
+
+NAME is the attachment's key, as the qpdf program lists it;
+interactively it is read with completion over the document's
+attachments.  Signal a `user-error' if there is no such
+attachment.
+
+Rewriting the document invalidates a signature, so if it has a
+signature field, ask before going ahead.  Return the document's
+attachment list after the change, as `pdf-info-getattachments'
+does."
+  (interactive
+   (progn
+     (let ((keys (pdf-misc--attachment-keys (pdf-undo--assert-file))))
+       (pdf-pages--assert-saved)
+       (unless keys
+         (user-error "Document has no attachments"))
+       (list (completing-read "Remove attachment: " keys nil t)))))
+  (let ((file (pdf-undo--assert-file)))
+    (unless (member name (pdf-misc--attachment-keys file))
+      (user-error "No attachment named `%s'" name))
+    (pdf-misc--write-attachments
+     (list (concat "--remove-attachment=" name) "--")
+     (format "Removed attachment `%s'" name))))
 
 (provide 'pdf-misc)
 
