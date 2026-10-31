@@ -15,6 +15,13 @@
   + Works on the current page, /N/ pages with a numeric prefix argument, or a qpdf page range such as =3-5,8,10-z= with ~C-u~.
   + Uses the =qpdf= program (8.4 or later), see ~pdf-pages-qpdf-program~.
   + Refuses to touch a buffer with unsaved changes, replaces the file only after qpdf succeeded, and keeps previous versions for ~pdf-pages-undo~ (~C-c C-o u~).
+- Add ~pdf-a11y-report~ to review the accessibility of tagged PDFs
+  + A conformance checker like veraPDF cannot judge reading order, the heading outline or whether alt text is real. ~M-x pdf-a11y-report~ lists what a person has to check: whether the document is tagged, its language and PDF/UA claim, untagged pages, fonts that are not embedded, every figure with its alt text (flagging missing, empty, generic and file-name alt text), the headings in reading order (flagging skipped levels) and the reading order of each page (flagging content read away from its page).
+  + Every entry is a button that shows the element in the PDF and highlights it where its area is known.
+
+** API changes (for package developers)
+- New server commands ~structure~, ~fonts~ and ~xmpmetadata~, with the wrappers ~pdf-info-structure~, ~pdf-info-fonts~ and ~pdf-info-xmp-metadata~.
+  + ~structure~ needs poppler-glib >= 0.26; ~pdf-info-structure-tree-p~ tells whether the server has it (feature ~structure-tree~).
 
 * Version 1.3.0
 ** New functionality to improve overall user experience

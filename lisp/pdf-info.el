@@ -604,6 +604,21 @@ interrupted."
            (push key options)))
        options))
     (pagelabels (mapcar #'car response))
+    (structure
+     (mapcar #'pdf-info-query--transform-structure-element response))
+    (fonts
+     (mapcar (lambda (r)
+               (cl-destructuring-bind (name type embedded subset substitute) r
+                 `((name . ,name)
+                   (type . ,(intern type))
+                   (embedded . ,(equal embedded "1"))
+                   (subset . ,(equal subset "1"))
+                   (substitute . ,(and (not (equal substitute ""))
+                                       substitute)))))
+             response))
+    (xmpmetadata
+     (let ((xmp (caar response)))
+       (and xmp (not (equal xmp "")) xmp)))
     (ping (caar response))
     (t response)))
 
@@ -624,6 +639,21 @@ interrupted."
              (top . ,(and (> (length (car action)) 0)
                           (string-to-number (pop action))))))
           (t `((uri . ,(pop action))))))))
+
+;; An element of the structure command's response.
+(defun pdf-info-query--transform-structure-element (r)
+  "Transform a structure element response R into an alist."
+  (cl-destructuring-bind (depth kind page edges has-alt alt actual lang text) r
+    `((depth . ,(string-to-number depth))
+      (kind . ,(intern kind))
+      (page . ,(string-to-number page))
+      (edges . ,(and (not (equal edges ""))
+                     (mapcar #'string-to-number
+                             (split-string edges " " t))))
+      (alt . ,(and (equal has-alt "1") alt))
+      (actual-text . ,(and (not (equal actual "")) actual))
+      (lang . ,(and (not (equal lang "")) lang))
+      (text . ,text))))
 
 (defun pdf-info-query--transform-annotation (a)
   (cl-labels ((not-empty (s)
@@ -1065,6 +1095,10 @@ A No-op, if BUFFER has not running server instance."
 
 (defun pdf-info-markup-annotations-p ()
   (not (null (memq 'markup-annotations (pdf-info-features)))))
+
+(defun pdf-info-structure-tree-p ()
+  "Return non-nil if the server can read the structure tree of tagged PDFs."
+  (not (null (memq 'structure-tree (pdf-info-features)))))
 
 (defmacro pdf-info-assert-writable-annotations ()
   `(unless (memq 'writable-annotations (pdf-info-features))
@@ -1912,6 +1946,64 @@ pages in FILE-OR-BUFFER."
 
   (pdf-info-query
    'pagelabels
+   (pdf-info--normalize-file-or-buffer file-or-buffer)))
+
+(defun pdf-info-structure (&optional file-or-buffer)
+  "Return the logical structure tree of document FILE-OR-BUFFER.
+
+The tree is returned flattened, in document order, which for a
+tagged PDF is the reading order.  Each element is an alist with
+the following keys.
+
+DEPTH -- The level of the element in the tree, starting at 1.
+
+KIND -- The element's kind as a symbol, e.g. `document',
+`section', `heading-1', `paragraph', `figure' or `table'.
+
+PAGE -- The page the element (or failing that, its first
+descendant with one) is on, or 0 if unknown.
+
+EDGES -- The relative edges of the element's BBox attribute, or
+nil.  The server only reads it for block-level elements, so
+figures never have edges.
+
+ALT -- The alternate description (/Alt), possibly empty, or nil
+if the element has none.
+
+ACTUAL-TEXT -- The replacement text (/ActualText), or nil.
+
+LANG -- The element's own language (/Lang), or nil.
+
+TEXT -- A short excerpt of the element's text, with whitespace
+folded.  It is empty for grouping elements like `section'.
+
+The list is empty if the document is not tagged.  Signal an error
+if the server lacks support, see `pdf-info-structure-tree-p'."
+  (unless (pdf-info-structure-tree-p)
+    (error "Reading the structure tree is not supported by this version of epdfinfo"))
+  (pdf-info-query
+   'structure
+   (pdf-info--normalize-file-or-buffer file-or-buffer)))
+
+(defun pdf-info-fonts (&optional file-or-buffer)
+  "Return the fonts used in document FILE-OR-BUFFER.
+
+Each font is an alist with keys NAME, the font's name without a
+subset tag; TYPE, a symbol like `type1', `truetype' or
+`cid-type0c'; EMBEDDED and SUBSET, both booleans; and SUBSTITUTE,
+the name of the font used in place of a font that is not
+embedded, or nil.  A font embedded as several subsets appears once
+per subset."
+  (pdf-info-query
+   'fonts
+   (pdf-info--normalize-file-or-buffer file-or-buffer)))
+
+(defun pdf-info-xmp-metadata (&optional file-or-buffer)
+  "Return the XMP metadata of document FILE-OR-BUFFER as a string.
+
+Return nil if the document has no XMP metadata."
+  (pdf-info-query
+   'xmpmetadata
    (pdf-info--normalize-file-or-buffer file-or-buffer)))
 
 (defun pdf-info-ping (&optional message)

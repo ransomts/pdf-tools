@@ -1,0 +1,18 @@
+% Untagged fixture with a font that is not embedded, for
+% test/pdf-a11y-test.el.
+%
+% Rebuild a11y-untagged.pdf from this directory with
+%
+%   pdflatex a11y-untagged.tex
+%
+% then delete the .aux and .log files.  The map line below drops the
+% font file for Times, so the PDF only names the font and a viewer
+% has to substitute one.
+\pdfmapline{=ptmr8r Times-Roman "TeXBase1Encoding ReEncodeFont" <8r.enc}
+\documentclass{article}
+\usepackage{times}
+\pagestyle{empty}
+\begin{document}
+\section{Untagged}
+This page has no structure tree and its body font is not embedded.
+\end{document}

@@ -1,0 +1,54 @@
+% Tagged PDF/UA-2 fixture for test/pdf-a11y-test.el.
+%
+% Rebuild a11y.pdf from this directory with (run twice for the
+% outline and structure tree to settle):
+%
+%   lualatex a11y.tex && lualatex a11y.tex
+%
+% then delete the .aux and .log files.  The images come from the mwe
+% package in TeX Live.  The figures cover good alt text, alt text
+% that is only a file name, and no alt text in the source.  For the
+% last one the LaTeX tagging code itself writes the file name
+% (example-image-b.pdf) as /Alt, so neither figure is flagged by
+% veraPDF, which is what the report is for.
+%
+% LaTeX never writes a figure without /Alt, so a11y-noalt.pdf is
+% derived from a11y.pdf with qpdf: the file-name alt becomes empty
+% and the second one is removed.
+%
+%   qpdf --qdf --object-streams=disable a11y.pdf tmp.pdf
+%   LC_ALL=C sed \
+%     -e '/\/Alt <feff006500780061006d0070006c0065002d0069006d006100670065005f/s/<.*>/()/' \
+%     -e '/\/Alt <feff006500780061006d0070006c0065002d0069006d006100670065002d0062/d' \
+%     tmp.pdf | fix-qdf > tmp2.pdf
+%   qpdf tmp2.pdf a11y-noalt.pdf && rm tmp.pdf tmp2.pdf
+\DocumentMetadata{lang=en, pdfstandard=ua-2, testphase=latest}
+\documentclass{article}
+\usepackage{graphicx}
+\title{Accessibility Fixture}
+\author{pdf-tools}
+\date{}
+\begin{document}
+\maketitle
+\section{Introduction}
+This document exercises the accessibility report.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=3cm,alt={A grey placeholder rectangle with the word Image}]{example-image}
+  \caption{A figure with good alternative text.}
+\end{figure}
+
+\subsection{Bad alternative text}
+The next figure is described only by its file name.
+
+\includegraphics[width=3cm,alt={example-image_a.png}]{example-image-a}
+
+The next figure has no alternative text at all.
+
+\includegraphics[width=3cm]{example-image-b}
+
+\newpage
+\section{Second page}
+Text on the second page.
+\end{document}

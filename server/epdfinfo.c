@@ -2046,9 +2046,14 @@ cmd_features (const epdfinfo_t *ctx, const command_arg_t *args)
     "no-form-reset",
 #endif
 #ifdef HAVE_POPPLER_SIGNATURES
-    "signatures"
+    "signatures",
 #else
-    "no-signatures"
+    "no-signatures",
+#endif
+#ifdef HAVE_POPPLER_STRUCTURE
+    "structure-tree"
+#else
+    "no-structure-tree"
 #endif
   };
   int i;
@@ -2471,6 +2476,311 @@ cmd_outline (const epdfinfo_t *ctx, const command_arg_t *args)
       poppler_index_iter_free (iter);
     }
   OK_END ();
+}
+
+#ifdef HAVE_POPPLER_STRUCTURE
+/* Name: structure
+   Args: filename
+   Returns: The document's logical structure tree (tagged PDF) in
+   document (i.e. reading) order, as a, possibly empty, list of
+   records:
+
+   depth kind page edges has-alt alt actual-text language text
+
+   DEPTH is the level in the tree (>= 1).  KIND is the element's
+   kind as a lower-case name (e.g. document, heading-1, paragraph,
+   figure).  PAGE is the element's page, or 0 if neither it nor any
+   of its descendants is associated with a page.  EDGES are the
+   relative edges of the element's BBox attribute, or empty if it has
+   none.  poppler-glib reads BBox only for block-level elements (e.g.
+   tables), not for figures or formulas, so these never have edges.
+   HAS-ALT is 1 if the element has an /Alt entry (possibly empty) and
+   0 otherwise; ALT is its value.  TEXT is a short excerpt of the
+   element's text; it is empty for grouping elements (document, part,
+   section, ...).
+
+   The list is empty if the document has no structure tree, i.e. it
+   is not tagged.
+
+   Errors: None
+*/
+
+/* Maximum number of characters of an element's text to return. */
+#define STRUCTURE_TEXT_MAX 120
+
+/* Return the 1-based page of the first element in ITER's subtree
+   (including ITER's own element) that has one, or 0. */
+static int
+structure_iter_page (PopplerStructureElementIter *iter)
+{
+  int page = 0;
+
+  do
+    {
+      PopplerStructureElement *elt
+        = poppler_structure_element_iter_get_element (iter);
+      PopplerStructureElementIter *child;
+
+      if (! elt)
+        continue;
+      page = poppler_structure_element_get_page (elt) + 1;
+      g_object_unref (elt);
+      if (page > 0)
+        break;
+      child = poppler_structure_element_iter_get_child (iter);
+      if (child)
+        {
+          page = structure_iter_page (child);
+          poppler_structure_element_iter_free (child);
+          if (page > 0)
+            break;
+        }
+    } while (poppler_structure_element_iter_next (iter));
+
+  return page > 0 ? page : 0;
+}
+
+/* Return the nick of KIND's enum value, e.g. "heading-1". */
+static const char *
+structure_kind_string (PopplerStructureElementKind kind)
+{
+  static GEnumClass *class = NULL;
+  GEnumValue *value;
+
+  if (! class)
+    class = g_type_class_ref (POPPLER_TYPE_STRUCTURE_ELEMENT_KIND);
+  value = g_enum_get_value (class, kind);
+  return value ? value->value_nick : "unknown";
+}
+
+/* Truncate STR to at most MAX characters and fold all whitespace
+   runs into one space, in place.  STR has to be valid UTF-8. */
+static char *
+structure_squeeze_text (char *str, glong max)
+{
+  char *in = str, *out = str;
+  glong n = 0;
+  gboolean space = FALSE;
+
+  while (*in && n < max)
+    {
+      gunichar c = g_utf8_get_char (in);
+      char *next = g_utf8_next_char (in);
+
+      if (g_unichar_isspace (c))
+        {
+          space = TRUE;
+        }
+      else
+        {
+          if (space && out != str)
+            {
+              *out++ = ' ';
+              ++n;
+            }
+          space = FALSE;
+          memmove (out, in, next - in);
+          out += next - in;
+          ++n;
+        }
+      in = next;
+    }
+  *out = '\0';
+  return str;
+}
+
+static void
+cmd_structure_walk (PopplerDocument *doc, PopplerStructureElementIter *iter,
+                    int depth)
+{
+  do
+    {
+      PopplerStructureElement *elt
+        = poppler_structure_element_iter_get_element (iter);
+      PopplerStructureElementIter *child;
+      PopplerRectangle bbox;
+      gchar *alt, *actual, *lang, *text = NULL;
+      int pn;
+
+      if (! elt)
+        continue;
+      /* Marked content and object references are leaves holding the
+         actual page content, not structure. */
+      if (poppler_structure_element_is_content (elt)
+          || poppler_structure_element_get_kind (elt)
+          == POPPLER_STRUCTURE_ELEMENT_OBJECT_REFERENCE)
+        {
+          g_object_unref (elt);
+          continue;
+        }
+
+      child = poppler_structure_element_iter_get_child (iter);
+      pn = poppler_structure_element_get_page (elt) + 1;
+      if (pn <= 0 && child)
+        {
+          PopplerStructureElementIter *copy
+            = poppler_structure_element_iter_copy (child);
+          pn = structure_iter_page (copy);
+          poppler_structure_element_iter_free (copy);
+        }
+
+      printf ("%d:", depth);
+      print_response_string (structure_kind_string
+                             (poppler_structure_element_get_kind (elt)),
+                             COLON);
+      printf ("%d:", pn > 0 ? pn : 0);
+
+      /* poppler-glib only reads the BBox of block-level elements;
+         figures, formulas and other illustrations are not, and so
+         carry no edges. */
+      if (pn > 0
+          && poppler_structure_element_is_block (elt)
+          && poppler_structure_element_get_bounding_box (elt, &bbox))
+        {
+          PopplerPage *page = poppler_document_get_page (doc, pn - 1);
+          double width, height;
+
+          if (page)
+            {
+              poppler_page_get_size (page, &width, &height);
+              /* BBox is in default user space, origin at the
+                 bottom-left. */
+              printf ("%f %f %f %f",
+                      MIN (bbox.x1, bbox.x2) / width,
+                      (height - MAX (bbox.y1, bbox.y2)) / height,
+                      MAX (bbox.x1, bbox.x2) / width,
+                      (height - MIN (bbox.y1, bbox.y2)) / height);
+              g_object_unref (page);
+            }
+        }
+      putchar (':');
+
+      alt = poppler_structure_element_get_alt_text (elt);
+      printf ("%d:", alt != NULL);
+      print_response_string (alt, COLON);
+      actual = poppler_structure_element_get_actual_text (elt);
+      print_response_string (actual, COLON);
+      lang = poppler_structure_element_get_language (elt);
+      print_response_string (lang, COLON);
+      if (! poppler_structure_element_is_grouping (elt))
+        text = poppler_structure_element_get_text
+          (elt, POPPLER_STRUCTURE_GET_TEXT_RECURSIVE);
+      if (text && g_utf8_validate (text, -1, NULL))
+        print_response_string (structure_squeeze_text
+                               (text, STRUCTURE_TEXT_MAX), NEWLINE);
+      else
+        putchar ('\n');
+
+      g_free (alt);
+      g_free (actual);
+      g_free (lang);
+      g_free (text);
+      g_object_unref (elt);
+
+      if (child)
+        {
+          cmd_structure_walk (doc, child, depth + 1);
+          poppler_structure_element_iter_free (child);
+        }
+    } while (poppler_structure_element_iter_next (iter));
+}
+
+const command_arg_type_t cmd_structure_spec[] =
+  {
+    ARG_DOC,
+  };
+
+static void
+cmd_structure (const epdfinfo_t *ctx, const command_arg_t *args)
+{
+  PopplerDocument *doc = args->value.doc->pdf;
+  PopplerStructureElementIter *iter = poppler_structure_element_iter_new (doc);
+
+  OK_BEGIN ();
+  if (iter)
+    {
+      cmd_structure_walk (doc, iter, 1);
+      poppler_structure_element_iter_free (iter);
+    }
+  OK_END ();
+}
+#endif  /* HAVE_POPPLER_STRUCTURE */
+
+/* Name: fonts
+   Args: filename
+   Returns: The fonts used in the document as a, possibly empty, list
+   of records:
+
+   name type embedded subset substitute
+
+   NAME is the font's name as given in the PDF, TYPE its type as a
+   lower-case name (e.g. type1, truetype, cid-type0c).  EMBEDDED and
+   SUBSET are 1 or 0.  SUBSTITUTE is the name of the font used in
+   place of a font that is not embedded, if any.
+
+   Errors: None
+*/
+
+const command_arg_type_t cmd_fonts_spec[] =
+  {
+    ARG_DOC,
+  };
+
+static void
+cmd_fonts (const epdfinfo_t *ctx, const command_arg_t *args)
+{
+  PopplerDocument *doc = args->value.doc->pdf;
+  PopplerFontInfo *info = poppler_font_info_new (doc);
+  PopplerFontsIter *iter = NULL;
+  GEnumClass *types = g_type_class_ref (POPPLER_TYPE_FONT_TYPE);
+  int npages = poppler_document_get_n_pages (doc);
+
+  OK_BEGIN ();
+  /* Scanning all pages in one go returns every font once. */
+  if (npages > 0 && poppler_font_info_scan (info, npages, &iter) && iter)
+    {
+      do
+        {
+          GEnumValue *type = g_enum_get_value
+            (types, poppler_fonts_iter_get_font_type (iter));
+
+          print_response_string (poppler_fonts_iter_get_name (iter), COLON);
+          print_response_string (type ? type->value_nick : "unknown", COLON);
+          printf ("%d:%d:",
+                  poppler_fonts_iter_is_embedded (iter) ? 1 : 0,
+                  poppler_fonts_iter_is_subset (iter) ? 1 : 0);
+          print_response_string (poppler_fonts_iter_get_substitute_name (iter),
+                                 NEWLINE);
+        } while (poppler_fonts_iter_next (iter));
+      poppler_fonts_iter_free (iter);
+    }
+  OK_END ();
+
+  g_type_class_unref (types);
+  poppler_font_info_free (info);
+}
+
+/* Name: xmpmetadata
+   Args: filename
+   Returns: The document's XMP metadata packet, or an empty string if
+   it has none.
+   Errors: None
+*/
+
+const command_arg_type_t cmd_xmpmetadata_spec[] =
+  {
+    ARG_DOC,
+  };
+
+static void
+cmd_xmpmetadata (const epdfinfo_t *ctx, const command_arg_t *args)
+{
+  gchar *xmp = poppler_document_get_metadata (args->value.doc->pdf);
+
+  OK_BEGIN ();
+  print_response_string (xmp, NEWLINE);
+  OK_END ();
+  g_free (xmp);
 }
 
 /* Name: quit
@@ -4325,6 +4635,13 @@ static const command_t commands [] =
     DEC_CMD (boundingbox),
     DEC_CMD (charlayout),
     DEC_CMD (pagelabels),
+
+    /* Accessibility */
+#ifdef HAVE_POPPLER_STRUCTURE
+    DEC_CMD (structure),
+#endif
+    DEC_CMD (fonts),
+    DEC_CMD (xmpmetadata),
 
     /* Annotations */
     DEC_CMD (getannots),
