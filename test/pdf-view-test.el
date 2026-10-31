@@ -253,6 +253,13 @@ The word \"replacement\" spans x from 477 to 563 pixel in it, at y 195.")
       (should (eq (pdf-sync--when-synctex 'pdf-sync-backward-search-mouse)
                   'pdf-sync-backward-search-mouse)))))
 
+(defun pdf-view-test--split-window (window)
+  "Split WINDOW below, taking half of it.
+A batch frame is nine lines high on Emacs 26.3 and 27.2 and
+twenty-five on 29 and later, so splitting off a fixed number of
+lines, as these tests first did, fails on the older ones."
+  (split-window window (max 2 (/ (window-height window) 2)) 'below))
+
 (ert-deftest pdf-view-new-window-records-overlay-in-its-window ()
   "The overlay of a new window belongs to that window, not to the selected one.
 
@@ -266,7 +273,7 @@ the new window without one of its own."
           (insert "page")
           (setq-local image-mode-winprops-alist nil)
           (let* ((other (selected-window))
-                 (win (split-window other 10 'below)))
+                 (win (pdf-view-test--split-window other)))
             (unwind-protect
                 (progn
                   (set-window-buffer win buf)
@@ -295,15 +302,19 @@ can win the display and go on showing the image it had before --
 how a signed PDF kept showing its empty signature field."
   (pdf-test-with-test-pdf-view
     (let ((pdf-win (selected-window)))
-      (set-window-buffer pdf-win (current-buffer))
-      (let ((new-win (split-window pdf-win 10 'below)))
+      (let ((new-win (pdf-view-test--split-window pdf-win)))
         (unwind-protect
             (progn
-              (set-window-buffer new-win (current-buffer))
               ;; What displaying the page does for each window after a
-              ;; split.  Rendering needs a window system, so only the
-              ;; overlay bookkeeping is exercised here.
+              ;; split.  Rendering needs a window system and an Emacs
+              ;; built with image support, which the batch Emacsen the
+              ;; tests run in need not have, so only the overlay
+              ;; bookkeeping is exercised here -- including what
+              ;; showing the buffer in the new window does, as that is
+              ;; where a window used to lose its overlay.
               (cl-letf (((symbol-function 'pdf-view-goto-page) #'ignore))
+                (set-window-buffer pdf-win (current-buffer))
+                (set-window-buffer new-win (current-buffer))
                 (dolist (win (list pdf-win new-win))
                   (pdf-view--window-overlay win)))
               (dolist (win (list pdf-win new-win))
@@ -354,7 +365,7 @@ records it too."
           (insert "page")
           (setq-local image-mode-winprops-alist nil)
           (let ((win (selected-window)))
-            (let ((other (split-window win 10 'below)))
+            (let ((other (pdf-view-test--split-window win)))
               (unwind-protect
                   (progn
                     (set-window-buffer other buf)
@@ -384,7 +395,7 @@ records it too."
           (insert "page")
           (setq-local image-mode-winprops-alist nil)
           (let ((win (selected-window)))
-            (let ((other (split-window win 10 'below)))
+            (let ((other (pdf-view-test--split-window win)))
               (unwind-protect
                   (progn
                     (set-window-buffer other buf)
