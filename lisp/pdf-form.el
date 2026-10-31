@@ -47,6 +47,13 @@
 ;;
 ;; From Lisp, `pdf-form-values' returns the values of a form and
 ;; `pdf-form-fill' fills one in, both by field name.
+;;
+;; M-x pdf-form-export-csv writes the values of a form as a CSV
+;; table, a header of field names and a row of values, and
+;; M-x pdf-form-import-csv reads such a table back into a form.
+;; M-x pdf-form-import-csv-batch fills in one copy of the document
+;; for every row of a table whose first column names the files, so
+;; that a roster in a spreadsheet becomes a filled-in PDF per person.
 
 (require 'pdf-view)
 (require 'pdf-info)
@@ -116,13 +123,46 @@ copies are kept there and outlive the Emacs session."
 ;; * Minor Mode
 ;; * ================================================================== *
 
+(defvar pdf-form-csv-map
+  (let ((kmap (make-sparse-keymap)))
+    (define-key kmap (kbd "e") 'pdf-form-export-csv)
+    (define-key kmap (kbd "i") 'pdf-form-import-csv)
+    (define-key kmap (kbd "b") 'pdf-form-import-csv-batch)
+    kmap)
+  "Keymap for the CSV commands of `pdf-form-minor-mode'.")
+
 (defvar pdf-form-minor-mode-map
   (let ((kmap (make-sparse-keymap)))
     (define-key kmap (kbd "C-c C-e") 'pdf-form-fill-field)
     (define-key kmap (kbd "C-c C-s") 'pdf-form-show-fields)
+    ;; A prefix, not single letters: `E' and `I' are free in this mode,
+    ;; but `I' is `pdf-misc-display-metadata' and the minor mode maps are
+    ;; searched in order, so a plain binding here would shadow it in
+    ;; every document with form fields.
+    (define-key kmap (kbd "C-c C-f") pdf-form-csv-map)
     (define-key kmap (kbd "TAB") 'pdf-form-next-field)
     (define-key kmap (kbd "<backtab>") 'pdf-form-previous-field)
-    kmap))
+    kmap)
+  "Keymap used in `pdf-form-minor-mode'.")
+
+(easy-menu-define pdf-form-menu pdf-form-minor-mode-map
+  "Menu for filling in PDF forms."
+  '("Form"
+    ["Fill Field..." pdf-form-fill-field]
+    ["Next Field" pdf-form-next-field]
+    ["Previous Field" pdf-form-previous-field]
+    "--"
+    ["Mark Fields" pdf-form-show-fields
+     :style toggle
+     :selected (bound-and-true-p pdf-form-show-fields)]
+    ["Reset Form" pdf-form-reset]
+    "--"
+    ["Export Values to CSV..." pdf-form-export-csv]
+    ["Import Values from CSV..." pdf-form-import-csv]
+    ["Fill in a PDF for Each Row of a CSV..." pdf-form-import-csv-batch]
+    "--"
+    ["Sign..." pdf-form-sign]
+    ["Show Signatures" pdf-form-signatures]))
 
 ;;;###autoload
 (define-minor-mode pdf-form-minor-mode
@@ -138,6 +178,13 @@ signature is valid, or offers to sign it if it is empty, see
 
 The fields you can interact with are marked on the page;
 \\[pdf-form-show-fields] turns the marks off and on.
+
+The CSV commands fill in a form from a table, or write its values out
+as one: \\[pdf-form-export-csv] writes the values of this form to a
+file, \\[pdf-form-import-csv] fills them in from one, and
+`pdf-form-import-csv-batch' does the latter for a whole file of rows,
+one PDF per row.  They are in the Form menu, and behind the prefix
+key `C-c C-f' in this mode.
 
 \\{pdf-form-minor-mode-map}"
   :group 'pdf-form
@@ -705,6 +752,444 @@ before any field is changed, so an error leaves the form as it was."
       (pdf-form--changed
        (delete-dups (mapcar (lambda (setting) (alist-get 'page (car setting)))
                             settings))))))
+
+;; * ================================================================== *
+;; * CSV tables
+;; * ================================================================== *
+
+;; A form and a table of values are the same shape, so a CSV file is a
+;; good way to fill in the same form for many people: export the blank
+;; form once, add a row in a spreadsheet for each of them, and let
+;; `pdf-form-import-csv-batch' write a copy of the PDF per row.
+
+(defun pdf-form--csv-parse (string)
+  "Return the rows of fields that the CSV STRING holds.
+
+The format is the one of RFC 4180: a comma separates the fields of
+a row and a CRLF or LF line ending separates the rows, a field may
+be enclosed in double quotes so that it can hold commas, line
+breaks and leading or trailing spaces, and a double quote inside
+such a field is written twice.  A line ending at the end of STRING
+does not start an empty row, and an empty STRING has no rows at
+all.
+
+The fields are returned as strings, without their quotes; the
+result is a list of rows in the order in which they appear."
+  (let ((i 0)
+        (end (length string))
+        (quoted nil)
+        (row nil)
+        (field nil)
+        (started nil)
+        rows)
+    (cl-labels ((end-field ()
+                  (push (apply #'string (nreverse field)) row)
+                  (setq field nil started nil))
+                (end-row ()
+                  (end-field)
+                  (push (nreverse row) rows)
+                  (setq row nil)))
+      (while (< i end)
+        (let ((c (aref string i)))
+          (cond
+           (quoted
+            (cond
+             ((eq c ?\")
+              (if (and (< (1+ i) end) (eq (aref string (1+ i)) ?\"))
+                  (progn (push ?\" field) (cl-incf i))
+                (setq quoted nil)))
+             (t (push c field))))
+           ((eq c ?\") (setq quoted t started t))
+           ((eq c ?,)
+            (end-field)
+            ;; The field after a comma is there, even if it is empty.
+            (setq started t))
+           ((eq c ?\n) (end-row))
+           ((eq c ?\r)
+            ;; CRLF is one line ending, but a lone CR ends the row too.
+            (unless (and (< (1+ i) end) (eq (aref string (1+ i)) ?\n))
+              (end-row)))
+           (t (push c field) (setq started t))))
+        (cl-incf i))
+      (when (or started row field)
+        (end-row))
+      (nreverse rows))))
+
+(defun pdf-form--csv-line (fields)
+  "Return the CSV line that writes the strings in FIELDS as one row.
+
+Quote a field that holds a comma, a double quote or a line break,
+or that begins or ends with a space or a tab, so that it parses
+back to what it was; write a double quote inside a quoted field
+twice.  The line does not end with a line break."
+  (mapconcat
+   (lambda (field)
+     (if (or (string-match-p "[\",\r\n]" field)
+             (string-match-p "\\`[ \t]\\|[ \t]\\'" field))
+         (concat "\"" (replace-regexp-in-string "\"" "\"\"" field t t) "\"")
+       field))
+   fields
+   ","))
+
+(defun pdf-form--csv-default-file ()
+  "Return the CSV file that belongs to the PDF visited by the buffer."
+  (let ((file (buffer-file-name)))
+    (and file
+         (concat (file-name-sans-extension file) ".csv"))))
+
+(defun pdf-form--read-csv-file (prompt)
+  "Read the name of a CSV file in the minibuffer, using PROMPT.
+
+Default to the CSV file that belongs to the visited PDF, see
+`pdf-form--csv-default-file', and return an absolute name."
+  (let ((default (pdf-form--csv-default-file)))
+    (expand-file-name
+     (read-file-name prompt
+                     (and default (file-name-directory default))
+                     default nil
+                     (and default (file-name-nondirectory default))))))
+
+(defun pdf-form--read-csv-table (file)
+  "Return the rows of the CSV FILE.
+
+The file is read as UTF-8, and a byte order mark at its start,
+which spreadsheets like to write, is ignored."
+  (unless (file-regular-p file)
+    (user-error "`%s' is not a file" (abbreviate-file-name file)))
+  (let ((text (with-temp-buffer
+                (let ((coding-system-for-read 'utf-8))
+                  (insert-file-contents file))
+                (buffer-string))))
+    (pdf-form--csv-parse (string-remove-prefix "\ufeff" text))))
+
+(defun pdf-form--csv-field-groups ()
+  "Return the fields of the document that may be filled in, by name.
+
+The result is an alist (NAME . WIDGETS) in document order, like
+`pdf-form--named-fields' without the read-only fields."
+  (cl-remove-if-not (lambda (group) (pdf-form-fillable-p (cadr group)))
+                    (pdf-form--named-fields)))
+
+(defun pdf-form--csv-cell-value (field text)
+  "Return the value that the CSV cell TEXT gives to FIELD.
+
+FIELD is one of the widgets of a field, see `pdf-info-formfields';
+its type says how to read TEXT, and `pdf-form--server-value' says
+whether the result fits.  Signal a `user-error' if TEXT is not
+something the type can hold."
+  (let-alist field
+    (cl-case .type
+      ((text multiline password file-select) text)
+      (checkbox
+       (let ((token (downcase (string-trim text))))
+         (cond ((member token '("true" "yes" "1" "on" "x")) t)
+               ((member token '("false" "no" "0" "off" "")) nil)
+               (t (user-error
+                   "`%s' takes a checked or an unchecked checkbox, not `%s'"
+                   .name text)))))
+      (radio
+       ;; The server cannot clear the selected button of a group,
+       ;; so an empty cell is no value to set and changes nothing.
+       (let ((number (string-trim text)))
+         (cond ((equal number "") nil)
+               ((string-match-p "\\`[0-9]+\\'" number)
+                (string-to-number number))
+               (t (user-error
+                   "`%s' takes the number of a button, not `%s'"
+                   .name text)))))
+      ((combo list)
+       (cond ((equal (string-trim text) "") nil)
+             ;; A list takes the items separated by a vertical bar,
+             ;; and so does a combo box that allows more than one.
+             ((memq 'multiple .flags)
+              (mapcar #'string-trim (split-string text "|")))
+             (t text))))))
+
+(defun pdf-form--csv-cell (field value)
+  "Return the CSV cell text that writes VALUE, the value of FIELD.
+
+This is the inverse of `pdf-form--csv-cell-value'."
+  (let-alist field
+    (cl-case .type
+      (checkbox (if value "true" "false"))
+      (radio (if value (number-to-string value) ""))
+      ((combo list)
+       (cond ((null value) "")
+             ((listp value) (string-join value "|"))
+             (t value)))
+      ((text multiline password file-select) (or value "")))))
+
+(defun pdf-form--csv-values (header cells)
+  "Return the form values that HEADER and CELLS describe.
+
+HEADER names the fields and CELLS holds their values as text, both
+lists of strings; a cell missing from the end of CELLS counts as
+empty.  Check every name before returning anything, and signal one
+`user-error' that lists the names the form does not have and those
+it has but cannot fill in, e.g. a read-only or signature field."
+  (let ((groups (pdf-form--csv-field-groups))
+        (known (mapcar (lambda (f) (alist-get 'name f))
+                       (pdf-form-fields
+                        (number-sequence 1 (pdf-cache-number-of-pages)))))
+        unknown
+        locked
+        values)
+    (cl-loop for name in header
+             for text in (append cells
+                                 (make-list (max 0 (- (length header)
+                                                      (length cells)))
+                                            ""))
+             do (let ((group (assoc name groups)))
+                  (cond
+                   (group
+                    (push (cons name
+                                (pdf-form--csv-cell-value (cadr group) text))
+                          values))
+                   ((member name known) (push name locked))
+                   (t (push name unknown)))))
+    (when (or unknown locked)
+      (user-error
+       "Cannot fill in the form: %s"
+       (string-join
+        (delq nil
+              (list (and unknown
+                         (format "no field named %s"
+                                 (mapconcat (lambda (name)
+                                              (format "`%s'" name))
+                                            (nreverse unknown) ", ")))
+                    (and locked
+                         (format "%s cannot be filled in"
+                                 (mapconcat (lambda (name)
+                                              (format "`%s'" name))
+                                            (nreverse locked) ", ")))))
+        "; ")))
+    (nreverse values)))
+
+(defun pdf-form--csv-header-and-row (file)
+  "Return the header and the first data row of the CSV FILE.
+
+The result is a cons (HEADER . CELLS), both lists of strings."
+  (let ((rows (pdf-form--read-csv-table file)))
+    (cond
+     ((null rows)
+      (user-error "`%s' has no table in it" (abbreviate-file-name file)))
+     ((null (cdr rows))
+      (user-error "`%s' has no row of values" (abbreviate-file-name file)))
+     (t (cons (car rows) (cadr rows))))))
+
+(defun pdf-form--show-text (text)
+  "Show TEXT in the buffer `*PDF form CSV*'."
+  (with-current-buffer (get-buffer-create "*PDF form CSV*")
+    (fundamental-mode)
+    (erase-buffer)
+    (insert text)
+    (goto-char (point-min))
+    ;; Batch mode has no window to show the buffer in.
+    (unless noninteractive
+      (display-buffer (current-buffer)))))
+
+(defun pdf-form--csv-table ()
+  "Return the CSV text of the values of the form in the current buffer.
+
+The first row names the fields you can fill in, in document order,
+and the second row holds their values.  Read-only fields are left
+out, because `pdf-form-import-csv' refuses to change them and a
+table that holds them could not be read back."
+  (let ((values (pdf-form-values))
+        (groups (pdf-form--named-fields)))
+    (when (null values)
+      (user-error "This document has no fields you can fill in"))
+    (setq values
+          (cl-remove-if-not
+           (lambda (nv)
+             (let ((group (assoc (car nv) groups)))
+               (and group (pdf-form-fillable-p (cadr group)))))
+           values))
+    (concat (pdf-form--csv-line (mapcar #'car values)) "\n"
+            (pdf-form--csv-line
+             (mapcar (lambda (nv)
+                       (pdf-form--csv-cell (cadr (assoc (car nv) groups))
+                                           (cdr nv)))
+                     values))
+            "\n")))
+
+(defun pdf-form-export-csv (&optional file)
+  "Write the values of the form in the current buffer to the CSV FILE.
+
+The file has two rows: a header with the names of the fields you
+can fill in, in document order, and their values.
+`pdf-form-import-csv' reads it back into a form, and
+`pdf-form-import-csv-batch' fills in one copy of the document per
+row of a table that a `file' column extends.
+
+Interactively, read FILE in the minibuffer, defaulting to the
+visited PDF with the suffix .csv, and ask before overwriting an
+existing file.  With a prefix argument, put the table in the
+buffer `*PDF form CSV*' instead, so that it can be copied out, e.g.
+into a spreadsheet.
+
+The values are written as `pdf-form-import-csv' reads them:
+`true' or `false' for a checkbox, the number of the selected
+button of a radio group, the selected item of a combo box, and the
+items of a list separated by a vertical bar.  Read-only fields are
+left out, and password fields are written in the clear.  A radio
+group with no button selected is an empty cell, which reads back as
+no change, because a viewer cannot clear a radio group."
+  (interactive
+   (progn
+     (pdf-util-assert-pdf-buffer)
+     (list (if current-prefix-arg
+               'buffer
+             (pdf-form--read-csv-file "Write the form values to CSV file: ")))))
+  (let ((text (pdf-form--csv-table)))
+    (if (eq file 'buffer)
+        (pdf-form--show-text text)
+      (setq file (expand-file-name (or file
+                                       (pdf-form--csv-default-file)
+                                       (user-error
+                                        "Buffer `%s' does not visit a file"
+                                        (buffer-name)))))
+      (when (and (called-interactively-p 'any)
+                 (file-exists-p file)
+                 (not (y-or-n-p (format "Overwrite `%s'? "
+                                        (abbreviate-file-name file)))))
+        (user-error "Not writing `%s'" (abbreviate-file-name file)))
+      (let ((coding-system-for-write 'utf-8-unix))
+        (with-temp-file file
+          (insert text)))
+      (message "Wrote the form values to %s" (abbreviate-file-name file)))))
+
+(defun pdf-form-import-csv (&optional file)
+  "Fill in the form in the current buffer from the first row of FILE.
+
+Interactively, read FILE in the minibuffer, defaulting to the
+visited PDF with the suffix .csv.  The file is a table as
+`pdf-form-export-csv' writes it: the first row names fields and
+the first row after it holds their values.  Further rows are
+ignored; `pdf-form-import-csv-batch' uses them to fill in many
+copies of a form.
+
+A field that the table does not name keeps its value.  The type of
+each field comes from `pdf-info-formfields' and decides how the
+text of its cell is read:
+
+- a text, multiline, password or file-select field takes the text
+  as it is, and an empty cell sets it to \"\",
+
+- a checkbox takes `true', `yes', `1', `on' or `x' for checked,
+  and `false', `no', `0', `off' or an empty cell for unchecked;
+  anything else is an error,
+
+- a radio group takes the number of the button to select,
+  counting from 1 in document order; an empty cell leaves the
+  group as it is, because a PDF viewer cannot clear a radio group,
+
+- a combo box takes the name of an item, and an empty cell selects
+  nothing; a list, and a combo box of which more than one item may
+  be selected, takes the items separated by a vertical bar, or a
+  single item.
+
+Every name is checked before any field changes: a name the form
+does not have, and one it has but cannot fill in, e.g. a read-only
+or signature field, raise one `user-error' that lists them all."
+  (interactive
+   (progn
+     (pdf-util-assert-pdf-buffer)
+     (list (pdf-form--read-csv-file "Import the form values from CSV file: "))))
+  (let ((table (pdf-form--csv-header-and-row file)))
+    (pdf-form-fill (pdf-form--csv-values (car table) (cdr table)))
+    (message "Filled in the form from %s" (abbreviate-file-name file))))
+
+(defun pdf-form--csv-failure (failure)
+  "Return a line that describes FAILURE, a cons (FILE . ERROR)."
+  (format "%s: %s" (abbreviate-file-name (car failure)) (cdr failure)))
+
+(defun pdf-form-import-csv-batch (&optional file)
+  "Fill in one copy of the form for every row of the CSV FILE.
+
+Interactively, read FILE in the minibuffer, defaulting to the
+visited PDF with the suffix .csv.  The first column of its header
+is named `file', in any case, and names the PDF to fill in,
+relative to the directory of FILE; the other columns are the field
+names of `pdf-form-import-csv', and every row after the header
+fills in the PDF it names, saves it and kills its buffer.
+
+Confirm the work first, with the number of rows and the directory
+the files are in.  A row that fails, e.g. because its file is
+missing or one of its values does not fit, does not stop the
+others, and leaves its file as it was: `pdf-form-fill' checks all
+values before it changes a field, so only saving can fail, and
+then the buffer is killed without being saved.
+
+Return the number of files that were filled in; the failures are
+listed in the buffer `*PDF form CSV*'."
+  (interactive
+   (progn
+     (pdf-util-assert-pdf-buffer)
+     (list (pdf-form--read-csv-file "Fill in a PDF from each row of CSV file: "))))
+  (let* ((file (expand-file-name file))
+         (directory (file-name-directory file))
+         (rows (pdf-form--read-csv-table file))
+         (header (car rows))
+         (fields (cdr header))
+         (data (cl-remove-if
+                (lambda (row) (cl-every #'string-empty-p row))
+                (cdr rows)))
+         failures
+         (filled 0))
+    (unless (and header (equal "file" (downcase (car header))))
+      (user-error "`%s' must start with a column named `file'"
+                  (abbreviate-file-name file)))
+    (unless data
+      (user-error "`%s' has no rows to fill in" (abbreviate-file-name file)))
+    (unless (y-or-n-p (format "Fill in %d PDF file%s in `%s'? "
+                              (length data)
+                              (if (= 1 (length data)) "" "s")
+                              (abbreviate-file-name directory)))
+      (user-error "Cancelled"))
+    (dolist (row data)
+      (let ((target (expand-file-name (car row) directory))
+            buffer)
+        (condition-case err
+            (progn
+              (unless (file-regular-p target)
+                (error "`%s' is not a file" (abbreviate-file-name target)))
+              (when (and (get-file-buffer target)
+                         (buffer-modified-p (get-file-buffer target)))
+                (error "`%s' is open with unsaved changes"
+                       (abbreviate-file-name target)))
+              (setq buffer (find-file-noselect target))
+              (with-current-buffer buffer
+                (unless (derived-mode-p 'pdf-view-mode)
+                  (pdf-view-mode))
+                (pdf-form-fill (pdf-form--csv-values fields (cdr row)))
+                (save-buffer))
+              (cl-incf filled))
+          (error
+           (push (cons target (error-message-string err)) failures)))
+        (when (buffer-live-p buffer)
+          ;; A failed save must not leave the half-filled buffer behind.
+          (with-current-buffer buffer
+            (set-buffer-modified-p nil))
+          (unless (eq buffer (current-buffer))
+            (kill-buffer buffer)))))
+    (setq failures (nreverse failures))
+    (cond
+     ((zerop filled)
+      (user-error "No PDF file was filled in: %s"
+                  (mapconcat #'pdf-form--csv-failure failures "; ")))
+     (failures
+      (pdf-form--show-text
+       (concat (format "Filled in %d of %d PDF files; these failed:\n\n"
+                       filled (+ filled (length failures)))
+               (mapconcat #'pdf-form--csv-failure failures "\n")
+               "\n"))
+      (message "Filled in %d of %d PDF files; see `*PDF form CSV*' for the \
+%d that failed" filled (+ filled (length failures)) (length failures)))
+     (t
+      (message "Filled in %d PDF file%s" filled
+               (if (= 1 filled) "" "s"))))
+    filled))
 
 ;; * ================================================================== *
 ;; * Signatures
